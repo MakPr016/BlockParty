@@ -2,7 +2,7 @@ import React from 'react'
 import { createBrowserRouter, RouterProvider } from "react-router-dom"
 import AppLayout from './components/layout/AppLayout'
 import { ThemeProvider } from "@/components/theme-provider"
-import { Dashboard, LandingPage, CreateWebhook } from './pages';
+import { Dashboard, LandingPage, CreateBounty, Bounties, BountyDetail  } from './pages';
 
 const router = createBrowserRouter([
   {
@@ -10,7 +10,9 @@ const router = createBrowserRouter([
     children: [
       { path: '/', element: <LandingPage /> },
       { path: '/dashboard', element: <Dashboard /> },
-      { path: '/createWebhook', element: <CreateWebhook /> },
+      { path: '/bounties', element: <Bounties /> },
+      { path: '/bounties/:id', element: <BountyDetail /> },
+      { path: '/createBounty', element: <CreateBounty /> },
     ]
   }
 ])

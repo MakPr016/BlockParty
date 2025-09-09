@@ -1,3 +1,5 @@
 export { default as Dashboard } from "./Dashboard"
+export { default as Bounties } from "./Bounties"
+export { default as BountyDetail } from "./BountyDetail"
 export { default as LandingPage } from "./LandingPage"
-export { default as CreateWebhook } from "./CreateWebhook"
+export { default as CreateBounty } from "./CreateBounty"

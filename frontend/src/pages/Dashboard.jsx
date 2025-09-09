@@ -5,12 +5,12 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { 
-  Github, 
-  ExternalLink, 
-  Plus, 
-  Star, 
-  GitFork, 
+import {
+  Github,
+  ExternalLink,
+  Plus,
+  Star,
+  GitFork,
   FolderGit2,
   Webhook,
   Activity,
@@ -21,6 +21,7 @@ import {
   Filter,
   X
 } from 'lucide-react'
+import MyBounties from '@/components/MyBounties'
 
 export default function Dashboard() {
   const { user } = useUser()
@@ -33,7 +34,7 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('')
   const [visibilityFilter, setVisibilityFilter] = useState('all')
   const [languageFilter, setLanguageFilter] = useState('all')
-  
+
   const REPOS_PER_PAGE = 9
 
   const availableLanguages = useMemo(() => {
@@ -47,7 +48,7 @@ export default function Dashboard() {
 
   const filteredRepositories = useMemo(() => {
     return repositories.filter(repo => {
-      const matchesSearch = searchQuery === '' || 
+      const matchesSearch = searchQuery === '' ||
         repo.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (repo.description && repo.description.toLowerCase().includes(searchQuery.toLowerCase()))
 
@@ -56,7 +57,7 @@ export default function Dashboard() {
         (visibilityFilter === 'private' && repo.private)
 
       const matchesLanguage = languageFilter === 'all' || repo.language === languageFilter
-      
+
       return matchesSearch && matchesVisibility && matchesLanguage
     })
   }, [repositories, searchQuery, visibilityFilter, languageFilter])
@@ -99,7 +100,7 @@ export default function Dashboard() {
       setLoading(true)
       setError(null)
       const token = await getToken()
-      
+
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/repositories`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -135,7 +136,7 @@ export default function Dashboard() {
         <div className="space-y-8">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">
-              Welcome back, {user?.firstName || 'there'}! 
+              Welcome back, {user?.firstName || 'there'}!
             </h1>
             <p className="text-muted-foreground">
               Here's an overview of your GitHub repositories
@@ -196,6 +197,8 @@ export default function Dashboard() {
             </Card>
           </div>
 
+          {/* Bounties section */}
+          <MyBounties />
           {/* Repositories Section with Search and Filters */}
           <Card>
             <CardHeader>
@@ -212,10 +215,10 @@ export default function Dashboard() {
                       )}
                     </CardDescription>
                   </div>
-                  <Button 
-                    onClick={loadRepositories} 
-                    disabled={loading} 
-                    variant="outline" 
+                  <Button
+                    onClick={loadRepositories}
+                    disabled={loading}
+                    variant="outline"
                     size="sm"
                     className="gap-2"
                   >
@@ -262,8 +265,8 @@ export default function Dashboard() {
                     </Select>
 
                     {hasActiveFilters && (
-                      <Button 
-                        variant="outline" 
+                      <Button
+                        variant="outline"
                         size="sm"
                         onClick={clearFilters}
                         className="gap-2"
@@ -280,17 +283,17 @@ export default function Dashboard() {
                     <p className="text-sm text-muted-foreground">
                       Showing {startIndex + 1}-{Math.min(endIndex, filteredRepositories.length)} of {filteredRepositories.length} repositories
                     </p>
-                    
+
                     <div className="flex items-center gap-1">
-                      <Button 
-                        variant="outline" 
+                      <Button
+                        variant="outline"
                         size="sm"
                         onClick={prevPage}
                         disabled={loading || currentPage === 0}
                       >
                         <ChevronLeft className="w-4 h-4" />
                       </Button>
-                      
+
                       <div className="flex items-center gap-1">
                         {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
                           let pageIndex;
@@ -303,7 +306,7 @@ export default function Dashboard() {
                           } else {
                             pageIndex = currentPage - 2 + i;
                           }
-                          
+
                           return (
                             <Button
                               key={pageIndex}
@@ -319,8 +322,8 @@ export default function Dashboard() {
                         })}
                       </div>
 
-                      <Button 
-                        variant="outline" 
+                      <Button
+                        variant="outline"
                         size="sm"
                         onClick={nextPage}
                         disabled={loading || currentPage === totalPages - 1}
@@ -359,7 +362,7 @@ export default function Dashboard() {
                     {repositories.length === 0 ? 'No repositories found' : 'No repositories match your filters'}
                   </h3>
                   <p className="text-muted-foreground mb-4">
-                    {repositories.length === 0 
+                    {repositories.length === 0
                       ? 'Make sure you have repositories in your GitHub account'
                       : 'Try adjusting your search or filter criteria'
                     }
@@ -389,7 +392,7 @@ export default function Dashboard() {
                           {repo.description || "No description available"}
                         </CardDescription>
                       </CardHeader>
-                      
+
                       <CardContent>
                         <div className="space-y-4">
                           <div className="flex items-center justify-between text-sm text-muted-foreground">
@@ -412,24 +415,24 @@ export default function Dashboard() {
                           </div>
 
                           <div className="flex gap-2">
-                            <Button 
-                              variant="outline" 
-                              size="sm" 
+                            <Button
+                              variant="outline"
+                              size="sm"
                               className="flex-1"
                               onClick={() => window.open(repo.html_url, '_blank')}
                             >
                               <ExternalLink className="w-4 h-4 mr-2" />
                               View
                             </Button>
-                            <Button 
-                              size="sm" 
+                            <Button
+                              size="sm"
                               className="flex-1"
                               onClick={() => {
-                                console.log(`Create webhook for ${repo.full_name}`)
+                                window.location.href = `/createBounty?repo=${encodeURIComponent(repo.full_name)}&owner=${repo.owner.login}&repoName=${repo.name}`
                               }}
                             >
                               <Plus className="w-4 h-4 mr-2" />
-                              Webhook
+                              Create Bounty
                             </Button>
                           </div>
                         </div>
