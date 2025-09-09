@@ -1,12 +1,26 @@
 import React from 'react'
-import Header from './components/layout/Header'
+import { createBrowserRouter, RouterProvider } from "react-router-dom"
+import AppLayout from './components/layout/AppLayout'
+import { ThemeProvider } from "@/components/theme-provider"
+import { Dashboard, LandingPage, CreateWebhook } from './pages';
+
+const router = createBrowserRouter([
+  {
+    element: <AppLayout />,
+    children: [
+      { path: '/', element: <LandingPage /> },
+      { path: '/dashboard', element: <Dashboard /> },
+      { path: '/createWebhook', element: <CreateWebhook /> },
+    ]
+  }
+])
+
 
 const App = () => {
   return (
-    <main>
-      <Header/>
-      Block Party
-    </main>
+    <ThemeProvider defaultTheme='dark' storageKey="vite-ui-theme" >
+      <RouterProvider router={router} />
+    </ThemeProvider>
   )
 }
 
