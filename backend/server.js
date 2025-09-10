@@ -47,7 +47,7 @@ app.use((req, res, next) => {
   next()
 })
 
-app.get('/health', (req, res) => {
+app.get('/', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
@@ -670,9 +670,8 @@ app.use((req, res) => {
   })
 })
 
-// app.listen(PORT, () => {
-//   console.log(`Server running on http://localhost:${PORT}`)
-//   console.log(`Health check: http://localhost:${PORT}/health`)
-// })
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`)
+})
 
 module.exports = app
