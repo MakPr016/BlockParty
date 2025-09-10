@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Target, LayoutDashboard, Home } from 'lucide-react'
 import ModeToggle from '@/components/mode-toggle'
+import WalletButton from '@/components/WalletButton'
 
 const Header = () => {
   const navigate = useNavigate()
@@ -15,13 +16,13 @@ const Header = () => {
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           {/* Logo and Brand */}
-          <div 
-            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" 
+          <div
+            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
             onClick={() => navigate('/')}
           >
-            <img 
-              src="/logo.png" 
-              alt="Block Party Logo" 
+            <img
+              src="/logo.png"
+              alt="Block Party Logo"
               className="h-8 w-8 object-contain"
             />
             <span className="font-bold text-xl text-primary">
@@ -29,7 +30,6 @@ const Header = () => {
             </span>
           </div>
 
-          {/* Navigation - Only show when signed in */}
           <SignedIn>
             <nav className="hidden md:flex items-center space-x-1">
               <Button
@@ -62,19 +62,16 @@ const Header = () => {
             </nav>
           </SignedIn>
 
-          {/* Right side - Auth + Theme Toggle */}
           <div className="flex items-center gap-3">
-            {/* Theme Toggle */}
             <ModeToggle />
-            
-            {/* Auth Section */}
+
             <div className="auth flex items-center gap-2">
               <SignedOut>
                 <SignInButton mode="modal" forceRedirectUrl="/dashboard">
                   <Button variant="default" size="sm" className="gap-2">
-                    <img 
-                      src="/logo.png" 
-                      alt="GitHub" 
+                    <img
+                      src="/logo.png"
+                      alt="GitHub"
                       className="w-4 h-4"
                     />
                     Sign In
@@ -82,12 +79,13 @@ const Header = () => {
                 </SignInButton>
               </SignedOut>
               <SignedIn>
-                <UserButton 
+                <WalletButton />
+                <UserButton
                   appearance={{
                     elements: {
                       avatarBox: "w-9 h-9",
-                      userButtonPopoverCard: "shadow-lg border",
-                      userButtonPopoverActionButton: "hover:bg-muted"
+                      userButtonPopoverCard: "shadow-lg border bg-gray-900 text-white border-gray-700",
+                      userButtonPopoverActionButton: "hover:bg-gray-800 text-white"
                     }
                   }}
                   userProfileMode="modal"

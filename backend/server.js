@@ -10,7 +10,7 @@ const app = express()
 const PORT = process.env.PORT || 3000
 
 // MongoDB setup
-const mongoUrl = process.env.MONGODB_URL || 'mongodb://127.0.0.1:27017/blockparty'
+const mongoUrl = process.env.MONGODB_URL
 const dbName = 'blockparty'
 let db
 

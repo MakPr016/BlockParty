@@ -3,6 +3,7 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom"
 import AppLayout from './components/layout/AppLayout'
 import { ThemeProvider } from "@/components/theme-provider"
 import { Dashboard, LandingPage, CreateBounty, Bounties, BountyDetail  } from './pages';
+import { Toaster } from "sonner"
 
 const router = createBrowserRouter([
   {
@@ -22,6 +23,11 @@ const App = () => {
   return (
     <ThemeProvider defaultTheme='dark' storageKey="vite-ui-theme" >
       <RouterProvider router={router} />
+      <Toaster 
+            position="top-right" 
+            richColors 
+            closeButton 
+          />
     </ThemeProvider>
   )
 }
