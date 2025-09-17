@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { parseDiff, Diff, Hunk } from 'react-diff-view'
+import 'react-diff-view/style/index.css'
 import { 
   DollarSign, 
   Calendar, 
@@ -22,8 +24,96 @@ import {
   ExternalLink,
   Loader2,
   Trash,
-  Edit2
+  Edit2,
+  Code,
+  GitPullRequest,
+  FileText,
+  X
 } from 'lucide-react'
+
+const diffStyles = `
+  .diff-gutter-insert {
+    background-color: #1a1a1a !important;
+    border-color: #22c55e !important;
+    color: #22c55e !important;
+  }
+  
+  .diff-gutter-delete {
+    background-color: #1a1a1a !important;
+    border-color: #ef4444 !important;
+    color: #ef4444 !important;
+  }
+  
+  .diff-gutter-normal {
+    background-color: #1a1a1a !important;
+    border-color: #374151 !important;
+    color: #9ca3af !important;
+  }
+  
+  .diff-code-insert {
+    background-color: #1a1a1a !important;
+    color: #22c55e !important;
+  }
+  
+  .diff-code-delete {
+    background-color: #1a1a1a !important;
+    color: #ef4444 !important;
+  }
+  
+  .diff-code-normal {
+    background-color: #1a1a1a !important;
+    color: #e5e7eb !important;
+  }
+  
+  .diff-line {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace !important;
+    font-size: 13px !important;
+    line-height: 1.5 !important;
+    background-color: #1a1a1a !important;
+  }
+  
+  .diff-gutter {
+    background-color: #1a1a1a !important;
+    border-color: #374151 !important;
+    color: #9ca3af !important;
+    font-size: 12px !important;
+  }
+  
+  .diff-widget {
+    border: 1px solid #374151 !important;
+    border-radius: 6px !important;
+    overflow: hidden !important;
+    background-color: #1a1a1a !important;
+    width: 100% !important;
+  }
+  
+  .diff-hunk-header {
+    background-color: #1a1a1a !important;
+    border-color: #374151 !important;
+    color: #9ca3af !important;
+    font-weight: 600 !important;
+  }
+  
+  .diff-table {
+    background-color: #1a1a1a !important;
+    width: 100% !important;
+    table-layout: fixed !important;
+  }
+  
+  .diff-table td {
+    background-color: #1a1a1a !important;
+  }
+  
+  .diff-gutter-col {
+    background-color: #1a1a1a !important;
+    width: 40px !important;
+  }
+  
+  .diff-code-col {
+    background-color: #1a1a1a !important;
+    width: calc(50% - 20px) !important;
+  }
+`
 
 export default function BountyDetail() {
   const { id } = useParams()
@@ -33,14 +123,39 @@ export default function BountyDetail() {
   
   const [bounty, setBounty] = useState(null)
   const [contributions, setContributions] = useState([])
+  const [pullRequests, setPullRequests] = useState([])
+  const [selectedPR, setSelectedPR] = useState(null)
+  const [prDiff, setPrDiff] = useState(null)
+  const [showDiff, setShowDiff] = useState(false)
+  const [completedPRDiff, setCompletedPRDiff] = useState(null)
+  const [loadingCompletedDiff, setLoadingCompletedDiff] = useState(false)
+  const [showCompletedDiff, setShowCompletedDiff] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [applyingBounty, setApplyingBounty] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [loadingPRs, setLoadingPRs] = useState(false)
+  const [loadingDiff, setLoadingDiff] = useState(false)
+
+  useEffect(() => {
+    const styleSheet = document.createElement("style")
+    styleSheet.innerText = diffStyles
+    document.head.appendChild(styleSheet)
+    
+    return () => {
+      document.head.removeChild(styleSheet)
+    }
+  }, [])
 
   useEffect(() => {
     loadBountyDetails()
   }, [id])
+
+  useEffect(() => {
+    if (bounty?.repositoryFullName) {
+      loadPullRequests()
+    }
+  }, [bounty?.repositoryFullName])
 
   const loadBountyDetails = async () => {
     try {
@@ -77,6 +192,90 @@ export default function BountyDetail() {
       setError(err.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadPullRequests = async () => {
+    if (!bounty?.repositoryFullName) return
+    
+    try {
+      setLoadingPRs(true)
+      const token = await getToken()
+      const [owner, repo] = bounty.repositoryFullName.split('/')
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/repositories/${owner}/${repo}/pulls?state=all&per_page=10`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setPullRequests(data.pulls || [])
+      }
+    } catch (err) {
+      console.error('Error loading pull requests:', err)
+    } finally {
+      setLoadingPRs(false)
+    }
+  }
+
+  const loadPRDiff = async (prNumber) => {
+    if (!bounty?.repositoryFullName) return
+    
+    try {
+      setLoadingDiff(true)
+      const token = await getToken()
+      const [owner, repo] = bounty.repositoryFullName.split('/')
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/repositories/${owner}/${repo}/pulls/${prNumber}/diff`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        const files = parseDiff(data.diff)
+        setPrDiff({ files, metadata: data.files })
+        setShowDiff(true)
+      }
+    } catch (err) {
+      console.error('Error loading PR diff:', err)
+      setError('Failed to load pull request diff')
+    } finally {
+      setLoadingDiff(false)
+    }
+  }
+
+  const loadCompletedPRDiff = async (contribution) => {
+    if (!bounty?.repositoryFullName) return
+    
+    try {
+      setLoadingCompletedDiff(true)
+      const token = await getToken()
+      const [owner, repo] = bounty.repositoryFullName.split('/')
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/repositories/${owner}/${repo}/pulls/${contribution.pr_number}/diff`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        const files = parseDiff(data.diff)
+        setCompletedPRDiff({ files, metadata: data.files, contribution })
+        setShowCompletedDiff(true)
+      }
+    } catch (err) {
+      console.error('Error loading completed PR diff:', err)
+      setError('Failed to load pull request diff')
+    } finally {
+      setLoadingCompletedDiff(false)
     }
   }
 
@@ -156,6 +355,37 @@ export default function BountyDetail() {
     })
   }
 
+  const renderFile = (file, index) => (
+    <div key={index} className="border border-gray-600 rounded-lg overflow-hidden bg-gray-900 w-full">
+      <div className="bg-gray-800 px-4 py-3 border-b border-gray-600">
+        <div className="flex items-center justify-between">
+          <span className="font-mono text-sm font-medium text-white">{file.newPath || file.oldPath}</span>
+          <div className="flex items-center gap-3 text-sm">
+            <span className="flex items-center gap-1 text-green-400 bg-green-900 px-2 py-1 rounded">
+              <Plus className="w-3 h-3" />
+              {file.additionsCount || 0}
+            </span>
+            <span className="flex items-center gap-1 text-red-400 bg-red-900 px-2 py-1 rounded">
+              <Minus className="w-3 h-3" />
+              {file.deletionsCount || 0}
+            </span>
+          </div>
+        </div>
+      </div>
+      <div className="overflow-x-auto bg-gray-900 w-full">
+        <Diff viewType="split" diffType={file.type} hunks={file.hunks || []}>
+          {(hunks) => 
+            hunks && hunks.length > 0 
+              ? hunks.map((hunk) => (
+                  <Hunk key={hunk.content} hunk={hunk} />
+                ))
+              : <div className="p-4 text-gray-400 text-sm bg-gray-900">No changes to display</div>
+          }
+        </Diff>
+      </div>
+    </div>
+  )
+
   const isOwnBounty = bounty?.createdBy === user?.id
   const hasApplied = bounty?.applicants?.some(applicant => applicant.userId === user?.id)
 
@@ -192,8 +422,7 @@ export default function BountyDetail() {
   return (
     <div className="min-h-screen bg-background">
       <main className="container mx-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto space-y-8">
-          {/* Header */}
+        <div className="max-w-7xl mx-auto space-y-8">
           <div className="flex items-center gap-4">
             <Button 
               variant="outline" 
@@ -207,11 +436,8 @@ export default function BountyDetail() {
             </Badge>
           </div>
 
-          {/* Main Content */}
-          <div className="grid lg:grid-cols-3 gap-8">
-            {/* Left Column - Bounty Details */}
-            <div className="lg:col-span-2 space-y-6">
-              {/* Title and Description */}
+          <div className="grid lg:grid-cols-4 gap-8">
+            <div className="lg:col-span-3 space-y-6">
               <Card>
                 <CardHeader>
                   <div className="flex items-start justify-between">
@@ -231,7 +457,6 @@ export default function BountyDetail() {
                 </CardContent>
               </Card>
 
-              {/* Tasks */}
               {bounty.tasks && bounty.tasks.length > 0 && (
                 <Card>
                   <CardHeader>
@@ -255,7 +480,6 @@ export default function BountyDetail() {
                 </Card>
               )}
 
-              {/* Additional Requirements */}
               {bounty.requirements && (
                 <Card>
                   <CardHeader>
@@ -269,7 +493,114 @@ export default function BountyDetail() {
                 </Card>
               )}
 
-              {/* Completion Details */}
+              {bounty.repositoryFullName && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <GitPullRequest className="w-5 h-5" />
+                      Related Pull Requests
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {loadingPRs ? (
+                      <div className="flex items-center justify-center py-4">
+                        <Loader2 className="w-6 h-6 animate-spin" />
+                      </div>
+                    ) : pullRequests.length > 0 ? (
+                      <div className="space-y-3">
+                        {pullRequests.slice(0, 5).map((pr) => (
+                          <div key={pr.number} className="border rounded-lg p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <Badge variant={pr.state === 'open' ? 'default' : pr.merged_at ? 'secondary' : 'destructive'}>
+                                    {pr.state === 'open' ? 'Open' : pr.merged_at ? 'Merged' : 'Closed'}
+                                  </Badge>
+                                  <span className="text-sm font-medium">#{pr.number}</span>
+                                </div>
+                                <h4 className="font-medium text-sm mb-1">{pr.title}</h4>
+                                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                  <span>by {pr.user.login}</span>
+                                  <span>{formatDate(pr.created_at)}</span>
+                                </div>
+                              </div>
+                              <div className="flex gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setSelectedPR(pr)
+                                    loadPRDiff(pr.number)
+                                  }}
+                                  disabled={loadingDiff}
+                                >
+                                  {loadingDiff && selectedPR?.number === pr.number ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Code className="w-4 h-4" />
+                                  )}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => window.open(pr.html_url, '_blank')}
+                                >
+                                  <ExternalLink className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-muted-foreground text-sm">No pull requests found</p>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
+              {showDiff && prDiff && selectedPR && (
+                <Card className="w-full">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="flex items-center gap-2">
+                        <FileText className="w-5 h-5" />
+                        PR #{selectedPR.number} - {selectedPR.title}
+                      </CardTitle>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setShowDiff(false)
+                          setSelectedPR(null)
+                          setPrDiff(null)
+                        }}
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="space-y-4 p-6">
+                      <div className="flex items-center gap-4 text-sm border-b pb-3">
+                        <span className="flex items-center gap-1 text-green-400 bg-green-900 px-2 py-1 rounded">
+                          <Plus className="w-3 h-3" />
+                          {prDiff.metadata.reduce((sum, file) => sum + file.additions, 0)} additions
+                        </span>
+                        <span className="flex items-center gap-1 text-red-400 bg-red-900 px-2 py-1 rounded">
+                          <Minus className="w-3 h-3" />
+                          {prDiff.metadata.reduce((sum, file) => sum + file.deletions, 0)} deletions
+                        </span>
+                        <span className="text-gray-300">{prDiff.files.length} files changed</span>
+                      </div>
+                      <div className="space-y-4 max-h-[600px] overflow-y-auto w-full">
+                        {prDiff.files.map(renderFile)}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               {bounty.status === 'completed' && contributions.length > 0 && (
                 <Card>
                   <CardHeader>
@@ -296,7 +627,7 @@ export default function BountyDetail() {
                           </div>
                         </div>
                         
-                        <div className="bg-muted p-4 rounded-lg space-y-2">
+                        <div className="bg-muted p-4 rounded-lg space-y-3">
                           <div className="flex items-center gap-2">
                             <GitMerge className="w-4 h-4" />
                             <span className="font-medium">Pull Request #{contribution.pr_number}</span>
@@ -316,25 +647,91 @@ export default function BountyDetail() {
                               {contribution.pr_commits} commit{contribution.pr_commits !== 1 ? 's' : ''}
                             </span>
                           </div>
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            onClick={() => window.open(contribution.pr_url, '_blank')}
-                          >
-                            <ExternalLink className="w-4 h-4 mr-2" />
-                            View Pull Request
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={() => window.open(contribution.pr_url, '_blank')}
+                            >
+                              <ExternalLink className="w-4 h-4 mr-2" />
+                              View Pull Request
+                            </Button>
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={() => loadCompletedPRDiff(contribution)}
+                              disabled={loadingCompletedDiff}
+                            >
+                              {loadingCompletedDiff ? (
+                                <>
+                                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                  Loading...
+                                </>
+                              ) : (
+                                <>
+                                  <Code className="w-4 h-4 mr-2" />
+                                  View Code Changes
+                                </>
+                              )}
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     ))}
                   </CardContent>
                 </Card>
               )}
+
+              {showCompletedDiff && completedPRDiff && (
+                <Card className="w-full">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="flex items-center gap-2">
+                        <FileText className="w-5 h-5" />
+                        Completed PR #{completedPRDiff.contribution.pr_number} - Code Changes
+                      </CardTitle>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setShowCompletedDiff(false)
+                          setCompletedPRDiff(null)
+                        }}
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="space-y-4 p-6">
+                      <div className="flex items-center gap-4 text-sm border-b pb-3">
+                        <span className="flex items-center gap-1 text-green-400 bg-green-900 px-2 py-1 rounded">
+                          <Plus className="w-3 h-3" />
+                          {completedPRDiff.metadata.reduce((sum, file) => sum + file.additions, 0)} additions
+                        </span>
+                        <span className="flex items-center gap-1 text-red-400 bg-red-900 px-2 py-1 rounded">
+                          <Minus className="w-3 h-3" />
+                          {completedPRDiff.metadata.reduce((sum, file) => sum + file.deletions, 0)} deletions
+                        </span>
+                        <span className="text-gray-300">{completedPRDiff.files.length} files changed</span>
+                      </div>
+                      <div className="space-y-4 max-h-[600px] overflow-y-auto w-full">
+                        {completedPRDiff.files.map(renderFile)}
+                      </div>
+                      <div className="border-t pt-3">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <span>Completed by {completedPRDiff.contribution.contributor_username}</span>
+                          <span>•</span>
+                          <span>Merged on {formatDate(completedPRDiff.contribution.merged_at)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </div>
 
-            {/* Right Column - Sidebar */}
-            <div className="space-y-6">
-              {/* Prize and Actions */}
+            <div className="lg:col-span-1 space-y-6">
               <Card>
                 <CardContent className="pt-6">
                   <div className="space-y-4">
@@ -351,7 +748,6 @@ export default function BountyDetail() {
                       <span>Deadline: {formatDate(bounty.deadline)}</span>
                     </div>
 
-                    {/* Owner Actions */}
                     {isOwnBounty && bounty.status !== 'completed' && (
                       <div className="pt-4 space-y-2">
                         <Button 
@@ -385,7 +781,6 @@ export default function BountyDetail() {
                       </div>
                     )}
 
-                    {/* Apply Button for Non-Owners */}
                     {bounty.status === 'active' && !isOwnBounty && (
                       <div className="pt-4">
                         {hasApplied ? (
@@ -415,7 +810,6 @@ export default function BountyDetail() {
                       </div>
                     )}
 
-                    {/* Owner Status Message */}
                     {isOwnBounty && bounty.status === 'active' && (
                       <div className="pt-4">
                         <Button disabled variant="secondary" className="w-full">
@@ -427,7 +821,6 @@ export default function BountyDetail() {
                 </CardContent>
               </Card>
 
-              {/* Repository Info */}
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg">Repository</CardTitle>
@@ -449,7 +842,6 @@ export default function BountyDetail() {
                 </CardContent>
               </Card>
 
-              {/* Applicants */}
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg">Applicants</CardTitle>
