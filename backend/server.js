@@ -1,20 +1,18 @@
-const express = require('express')
-const cors = require('cors')
-const { ClerkExpressRequireAuth } = require('@clerk/clerk-sdk-node')
-const { clerkClient } = require('@clerk/clerk-sdk-node')
-const { Octokit } = require('@octokit/core')
-const { MongoClient } = require('mongodb')
-require('dotenv').config()
+import express from 'express'
+import cors from 'cors'
+import { ClerkExpressRequireAuth, clerkClient } from '@clerk/clerk-sdk-node'
+import { Octokit } from '@octokit/core'
+import { MongoClient, ObjectId } from 'mongodb'
+import dotenv from 'dotenv'
 
+dotenv.config()
 
 const app = express()
 const PORT = process.env.PORT || 3000
 
-
 const mongoUrl = process.env.MONGODB_URL
 const dbName = 'blockparty'
 let db
-
 
 MongoClient.connect(mongoUrl).then(client => {
   console.log('Connected to MongoDB')
@@ -24,18 +22,15 @@ MongoClient.connect(mongoUrl).then(client => {
   process.exit(1)
 })
 
-
 if (!process.env.CLERK_SECRET_KEY) {
   console.error('CLERK_SECRET_KEY is missing in .env file')
   process.exit(1)
 }
 
-
 app.use(cors({
   origin: ['http://localhost:5173', 'http://localhost:3000'],
   credentials: true
 }))
-
 
 app.use(express.json({
   verify: (req, res, buf, encoding) => {
@@ -45,12 +40,10 @@ app.use(express.json({
   }
 }))
 
-
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`)
   next()
 })
-
 
 app.get('/health', (req, res) => {
   res.json({ 
@@ -60,7 +53,6 @@ app.get('/health', (req, res) => {
     mongoConnected: !!db
   })
 })
-
 
 const handleClerkAuth = (req, res, next) => {
   ClerkExpressRequireAuth()(req, res, (err) => {
@@ -74,7 +66,6 @@ const handleClerkAuth = (req, res, next) => {
   })
 }
 
-
 app.get('/api/repositories', handleClerkAuth, async (req, res) => {
   try {
     const userId = req.auth.userId
@@ -85,7 +76,6 @@ app.get('/api/repositories', handleClerkAuth, async (req, res) => {
         error: 'GitHub token not found. Please reconnect your GitHub account.' 
       })
     }
-
 
     const githubToken = oauthTokens[0].token
     const octokit = new Octokit({ auth: githubToken })
@@ -107,13 +97,11 @@ app.get('/api/repositories', handleClerkAuth, async (req, res) => {
       })
     }
 
-
     if (error.status === 403) {
       return res.status(403).json({ 
         error: 'Insufficient GitHub permissions.' 
       })
     }
-
 
     res.status(500).json({ 
       error: 'Failed to fetch repositories',
@@ -121,7 +109,6 @@ app.get('/api/repositories', handleClerkAuth, async (req, res) => {
     })
   }
 })
-
 
 app.get('/api/repositories/:owner/:repo/pulls', handleClerkAuth, async (req, res) => {
   try {
@@ -176,7 +163,6 @@ app.get('/api/repositories/:owner/:repo/pulls', handleClerkAuth, async (req, res
     })
   }
 })
-
 
 app.get('/api/repositories/:owner/:repo/pulls/:number/diff', handleClerkAuth, async (req, res) => {
   try {
@@ -241,7 +227,6 @@ app.get('/api/repositories/:owner/:repo/pulls/:number/diff', handleClerkAuth, as
   }
 })
 
-
 app.post('/api/repositories/:owner/:repo/webhook', handleClerkAuth, async (req, res) => {
   try {
     const { owner, repo } = req.params
@@ -254,7 +239,6 @@ app.post('/api/repositories/:owner/:repo/webhook', handleClerkAuth, async (req, 
         error: 'GitHub token not found. Please reconnect your GitHub account.' 
       })
     }
-
 
     const githubToken = oauthTokens[0].token
     const octokit = new Octokit({ auth: githubToken })
@@ -282,7 +266,6 @@ app.post('/api/repositories/:owner/:repo/webhook', handleClerkAuth, async (req, 
       throw error
     }
 
-
     const requiredEvents = ['push', 'pull_request', 'issues', 'issue_comment']
     const existingWebhook = existingHooks.find(hook => {
       const sameUrl = hook.config?.url === webhookUrl
@@ -291,10 +274,8 @@ app.post('/api/repositories/:owner/:repo/webhook', handleClerkAuth, async (req, 
       return sameUrl && sameEvents
     })
 
-
     let webhookResponse
     let isExisting = false
-
 
     if (existingWebhook && existingWebhook.active) {
       console.log(`Using existing webhook ${existingWebhook.id} for ${owner}/${repo}`)
@@ -320,13 +301,11 @@ app.post('/api/repositories/:owner/:repo/webhook', handleClerkAuth, async (req, 
       })
     }
 
-
     const existingStoredWebhook = await db.collection('webhooks').findOne({
       userId,
       webhookId: webhookResponse.data.id,
       repositoryId: `${owner}/${repo}`
     })
-
 
     if (!existingStoredWebhook) {
       const webhookData = {
@@ -343,13 +322,11 @@ app.post('/api/repositories/:owner/:repo/webhook', handleClerkAuth, async (req, 
         updatedAt: new Date()
       }
 
-
       const result = await db.collection('webhooks').insertOne(webhookData)
       console.log(`Stored webhook record with MongoDB ID: ${result.insertedId}`)
     } else {
       console.log(`Webhook record already exists in database`)
     }
-
 
     res.json({
       success: true,
@@ -362,7 +339,6 @@ app.post('/api/repositories/:owner/:repo/webhook', handleClerkAuth, async (req, 
         active: webhookResponse.data.active
       }
     })
-
 
   } catch (error) {
     console.error('Webhook creation error:', error)
@@ -379,14 +355,12 @@ app.post('/api/repositories/:owner/:repo/webhook', handleClerkAuth, async (req, 
       })
     }
 
-
     res.status(500).json({ 
       error: 'Failed to create or find webhook',
       details: error.message 
     })
   }
 })
-
 
 app.post('/api/webhook/callback', async (req, res) => {
   try {
@@ -397,13 +371,11 @@ app.post('/api/webhook/callback', async (req, res) => {
       bodyType: typeof req.body
     })
 
-
     const event = req.headers['x-github-event']
     if (!event) {
       console.error('Missing x-github-event header')
       return res.status(400).json({ error: 'Missing GitHub event header' })
     }
-
 
     const payload = req.body
     
@@ -411,7 +383,6 @@ app.post('/api/webhook/callback', async (req, res) => {
       console.error('Invalid payload structure:', typeof payload)
       return res.status(400).json({ error: 'Invalid payload structure' })
     }
-
 
     console.log(`Processing ${event} event for repository: ${payload.repository?.full_name}`)
     
@@ -466,7 +437,6 @@ app.post('/api/webhook/callback', async (req, res) => {
   }
 })
 
-
 async function handleMergedPR(payload) {
   try {
     const pr = payload.pull_request
@@ -502,7 +472,7 @@ async function handleMergedPR(payload) {
       created_at: new Date()
     }
     
-    await db.collection('contributions').insertOne(contributionData)
+    const contributionResult = await db.collection('contributions').insertOne(contributionData)
     
     await db.collection('bounties').updateOne(
       { _id: bounty._id },
@@ -511,7 +481,7 @@ async function handleMergedPR(payload) {
           status: 'completed',
           completedAt: new Date(),
           completedBy: pr.user.login,
-          contributionId: contributionData._id,
+          contributionId: contributionResult.insertedId,
           updatedAt: new Date()
         }
       }
@@ -523,7 +493,6 @@ async function handleMergedPR(payload) {
     console.error('Error handling merged PR:', error)
   }
 }
-
 
 app.get('/api/webhooks', handleClerkAuth, async (req, res) => {
   try {
@@ -541,7 +510,6 @@ app.get('/api/webhooks', handleClerkAuth, async (req, res) => {
     })
   }
 })
-
 
 app.post('/api/bounties', handleClerkAuth, async (req, res) => {
   try {
@@ -569,7 +537,6 @@ app.post('/api/bounties', handleClerkAuth, async (req, res) => {
   }
 })
 
-
 app.get('/api/bounties', handleClerkAuth, async (req, res) => {
   try {
     const bounties = await db.collection('bounties')
@@ -586,10 +553,8 @@ app.get('/api/bounties', handleClerkAuth, async (req, res) => {
   }
 })
 
-
 app.get('/api/bounties/:id', handleClerkAuth, async (req, res) => {
   try {
-    const { ObjectId } = require('mongodb')
     const bountyId = req.params.id
     
     const bounty = await db.collection('bounties').findOne({ 
@@ -609,7 +574,6 @@ app.get('/api/bounties/:id', handleClerkAuth, async (req, res) => {
   }
 })
 
-
 app.get('/api/my-bounties', handleClerkAuth, async (req, res) => {
   try {
     const userId = req.auth.userId
@@ -627,10 +591,8 @@ app.get('/api/my-bounties', handleClerkAuth, async (req, res) => {
   }
 })
 
-
 app.patch('/api/bounties/:id/status', handleClerkAuth, async (req, res) => {
   try {
-    const { ObjectId } = require('mongodb')
     const bountyId = req.params.id
     const { status } = req.body
     const userId = req.auth.userId
@@ -666,10 +628,8 @@ app.patch('/api/bounties/:id/status', handleClerkAuth, async (req, res) => {
   }
 })
 
-
 app.delete('/api/bounties/:id', handleClerkAuth, async (req, res) => {
   try {
-    const { ObjectId } = require('mongodb')
     const bountyId = req.params.id
     const userId = req.auth.userId
     
@@ -700,10 +660,8 @@ app.delete('/api/bounties/:id', handleClerkAuth, async (req, res) => {
   }
 })
 
-
 app.get('/api/bounties/:id/contributions', handleClerkAuth, async (req, res) => {
   try {
-    const { ObjectId } = require('mongodb')
     const bountyId = req.params.id
     
     const contributions = await db.collection('contributions')
@@ -720,12 +678,10 @@ app.get('/api/bounties/:id/contributions', handleClerkAuth, async (req, res) => 
   }
 })
 
-
 app.post('/api/bounties/:id/apply', handleClerkAuth, async (req, res) => {
   try {
     const bountyId = req.params.id
     const userId = req.auth.userId
-    const { ObjectId } = require('mongodb')
     
     const bounty = await db.collection('bounties').findOne({ 
       _id: new ObjectId(bountyId) 
@@ -743,7 +699,7 @@ app.post('/api/bounties/:id/apply', handleClerkAuth, async (req, res) => {
       return res.status(400).json({ error: 'Already applied to this bounty' })
     }
     
-    const result = await db.collection('bounties').updateOne(
+    await db.collection('bounties').updateOne(
       { _id: new ObjectId(bountyId) },
       {
         $push: {
@@ -766,7 +722,6 @@ app.post('/api/bounties/:id/apply', handleClerkAuth, async (req, res) => {
   }
 })
 
-
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err)
   
@@ -787,22 +742,12 @@ app.use((err, req, res, next) => {
   })
 })
 
-
-app.use((error, req, res, next) => {
-  res.status(500).json({ 
-    error: 'Internal server error',
-    details: error.message 
-  })
-})
-
-
 app.use((req, res) => {
   res.status(404).json({ 
     error: 'Route not found',
     path: req.url 
   })
 })
-
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`)
