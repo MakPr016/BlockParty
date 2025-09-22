@@ -9,7 +9,6 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { parseDiff, Diff, Hunk } from 'react-diff-view'
 import 'react-diff-view/style/index.css'
 import { 
-  DollarSign, 
   Calendar, 
   User, 
   Github, 
@@ -26,7 +25,6 @@ import {
   Trash,
   Edit2,
   Code,
-  GitPullRequest,
   FileText,
   X
 } from 'lucide-react'
@@ -123,10 +121,6 @@ export default function BountyDetail() {
   
   const [bounty, setBounty] = useState(null)
   const [contributions, setContributions] = useState([])
-  const [pullRequests, setPullRequests] = useState([])
-  const [selectedPR, setSelectedPR] = useState(null)
-  const [prDiff, setPrDiff] = useState(null)
-  const [showDiff, setShowDiff] = useState(false)
   const [completedPRDiff, setCompletedPRDiff] = useState(null)
   const [loadingCompletedDiff, setLoadingCompletedDiff] = useState(false)
   const [showCompletedDiff, setShowCompletedDiff] = useState(false)
@@ -134,8 +128,6 @@ export default function BountyDetail() {
   const [error, setError] = useState(null)
   const [applyingBounty, setApplyingBounty] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [loadingPRs, setLoadingPRs] = useState(false)
-  const [loadingDiff, setLoadingDiff] = useState(false)
 
   useEffect(() => {
     const styleSheet = document.createElement("style")
@@ -150,12 +142,6 @@ export default function BountyDetail() {
   useEffect(() => {
     loadBountyDetails()
   }, [id])
-
-  useEffect(() => {
-    if (bounty?.repositoryFullName) {
-      loadPullRequests()
-    }
-  }, [bounty?.repositoryFullName])
 
   const loadBountyDetails = async () => {
     try {
@@ -192,61 +178,6 @@ export default function BountyDetail() {
       setError(err.message)
     } finally {
       setLoading(false)
-    }
-  }
-
-  const loadPullRequests = async () => {
-    if (!bounty?.repositoryFullName) return
-    
-    try {
-      setLoadingPRs(true)
-      const token = await getToken()
-      const [owner, repo] = bounty.repositoryFullName.split('/')
-      
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/repositories/${owner}/${repo}/pulls?state=all&per_page=10`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        setPullRequests(data.pulls || [])
-      }
-    } catch (err) {
-      console.error('Error loading pull requests:', err)
-    } finally {
-      setLoadingPRs(false)
-    }
-  }
-
-  const loadPRDiff = async (prNumber) => {
-    if (!bounty?.repositoryFullName) return
-    
-    try {
-      setLoadingDiff(true)
-      const token = await getToken()
-      const [owner, repo] = bounty.repositoryFullName.split('/')
-      
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/repositories/${owner}/${repo}/pulls/${prNumber}/diff`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        const files = parseDiff(data.diff)
-        setPrDiff({ files, metadata: data.files })
-        setShowDiff(true)
-      }
-    } catch (err) {
-      console.error('Error loading PR diff:', err)
-      setError('Failed to load pull request diff')
-    } finally {
-      setLoadingDiff(false)
     }
   }
 
@@ -447,156 +378,37 @@ export default function BountyDetail() {
                         <Github className="w-4 h-4" />
                         <span className="font-mono">{bounty.repositoryFullName}</span>
                       </div>
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Calendar className="w-4 h-4" />
+                        <span>Created {formatDate(bounty.createdAt)}</span>
+                      </div>
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <CardDescription className="text-base leading-relaxed">
+                  <CardDescription className="text-base leading-relaxed whitespace-pre-wrap">
                     {bounty.description}
                   </CardDescription>
                 </CardContent>
               </Card>
 
-              {bounty.tasks && bounty.tasks.length > 0 && (
+              {bounty.requirements && bounty.requirements.length > 0 && (
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                       <Target className="w-5 h-5" />
-                      Tasks to Complete
+                      Requirements
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <ul className="space-y-3">
-                      {bounty.tasks.map((task, index) => (
+                    <ul className="space-y-2">
+                      {bounty.requirements.map((requirement, index) => (
                         <li key={index} className="flex items-start gap-3">
-                          <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-sm font-medium mt-0.5">
-                            {index + 1}
-                          </div>
-                          <span className="flex-1">{task}</span>
+                          <div className="w-2 h-2 rounded-full bg-primary mt-2 flex-shrink-0" />
+                          <span className="text-sm">{requirement}</span>
                         </li>
                       ))}
                     </ul>
-                  </CardContent>
-                </Card>
-              )}
-
-              {bounty.requirements && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Additional Requirements</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-muted-foreground leading-relaxed">
-                      {bounty.requirements}
-                    </p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {bounty.repositoryFullName && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <GitPullRequest className="w-5 h-5" />
-                      Related Pull Requests
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    {loadingPRs ? (
-                      <div className="flex items-center justify-center py-4">
-                        <Loader2 className="w-6 h-6 animate-spin" />
-                      </div>
-                    ) : pullRequests.length > 0 ? (
-                      <div className="space-y-3">
-                        {pullRequests.slice(0, 5).map((pr) => (
-                          <div key={pr.number} className="border rounded-lg p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2 mb-1">
-                                  <Badge variant={pr.state === 'open' ? 'default' : pr.merged_at ? 'secondary' : 'destructive'}>
-                                    {pr.state === 'open' ? 'Open' : pr.merged_at ? 'Merged' : 'Closed'}
-                                  </Badge>
-                                  <span className="text-sm font-medium">#{pr.number}</span>
-                                </div>
-                                <h4 className="font-medium text-sm mb-1">{pr.title}</h4>
-                                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                  <span>by {pr.user.login}</span>
-                                  <span>{formatDate(pr.created_at)}</span>
-                                </div>
-                              </div>
-                              <div className="flex gap-1">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => {
-                                    setSelectedPR(pr)
-                                    loadPRDiff(pr.number)
-                                  }}
-                                  disabled={loadingDiff}
-                                >
-                                  {loadingDiff && selectedPR?.number === pr.number ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                  ) : (
-                                    <Code className="w-4 h-4" />
-                                  )}
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => window.open(pr.html_url, '_blank')}
-                                >
-                                  <ExternalLink className="w-4 h-4" />
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-muted-foreground text-sm">No pull requests found</p>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
-
-              {showDiff && prDiff && selectedPR && (
-                <Card className="w-full">
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="flex items-center gap-2">
-                        <FileText className="w-5 h-5" />
-                        PR #{selectedPR.number} - {selectedPR.title}
-                      </CardTitle>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setShowDiff(false)
-                          setSelectedPR(null)
-                          setPrDiff(null)
-                        }}
-                      >
-                        <X className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="p-0">
-                    <div className="space-y-4 p-6">
-                      <div className="flex items-center gap-4 text-sm border-b pb-3">
-                        <span className="flex items-center gap-1 text-green-400 bg-green-900 px-2 py-1 rounded">
-                          <Plus className="w-3 h-3" />
-                          {prDiff.metadata.reduce((sum, file) => sum + file.additions, 0)} additions
-                        </span>
-                        <span className="flex items-center gap-1 text-red-400 bg-red-900 px-2 py-1 rounded">
-                          <Minus className="w-3 h-3" />
-                          {prDiff.metadata.reduce((sum, file) => sum + file.deletions, 0)} deletions
-                        </span>
-                        <span className="text-gray-300">{prDiff.files.length} files changed</span>
-                      </div>
-                      <div className="space-y-4 max-h-[600px] overflow-y-auto w-full">
-                        {prDiff.files.map(renderFile)}
-                      </div>
-                    </div>
                   </CardContent>
                 </Card>
               )}
@@ -624,6 +436,11 @@ export default function BountyDetail() {
                             <p className="text-sm text-muted-foreground">
                               Completed on {formatDate(contribution.merged_at)}
                             </p>
+                            {contribution.payment_status === 'completed' && (
+                              <p className="text-sm text-green-600">
+                                Payment sent: {bounty.amount} GTK
+                              </p>
+                            )}
                           </div>
                         </div>
                         
@@ -737,16 +554,23 @@ export default function BountyDetail() {
                   <div className="space-y-4">
                     <div className="text-center">
                       <div className="text-3xl font-bold text-green-600 flex items-center justify-center gap-1">
-                        <DollarSign className="w-6 h-6" />
-                        {bounty.prize} {bounty.currency}
+                        {bounty.amount} ETH
                       </div>
                       <p className="text-sm text-muted-foreground">Prize Amount</p>
                     </div>
 
                     <div className="flex items-center justify-center gap-1 text-sm text-muted-foreground">
                       <Calendar className="w-4 h-4" />
-                      <span>Deadline: {formatDate(bounty.deadline)}</span>
+                      <span>Created: {formatDate(bounty.createdAt)}</span>
                     </div>
+
+                    {bounty.escrowStatus && (
+                      <div className="text-center">
+                        <Badge variant={bounty.escrowStatus === 'active' ? 'default' : 'secondary'}>
+                          Escrow: {bounty.escrowStatus}
+                        </Badge>
+                      </div>
+                    )}
 
                     {isOwnBounty && bounty.status !== 'completed' && (
                       <div className="pt-4 space-y-2">
@@ -851,6 +675,15 @@ export default function BountyDetail() {
                     <User className="w-4 h-4" />
                     <span>{bounty.applicants?.length || 0} applicants</span>
                   </div>
+                  {bounty.applicants && bounty.applicants.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {bounty.applicants.slice(0, 5).map((applicant, index) => (
+                        <div key={index} className="text-sm text-muted-foreground">
+                          Applied {formatDate(applicant.appliedAt)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>

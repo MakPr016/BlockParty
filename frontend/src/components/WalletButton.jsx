@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useUser } from '@clerk/clerk-react'
+import { useUser, useAuth } from '@clerk/clerk-react'
 import { Button } from '@/components/ui/button'
 import { 
   Dialog, 
@@ -9,18 +9,111 @@ import {
   DialogTitle, 
   DialogTrigger 
 } from '@/components/ui/dialog'
-import { Wallet, Plus, Copy, Loader2, AlertCircle } from 'lucide-react'
+import { toast } from 'sonner'
+import { Wallet, Plus, Copy, Loader2, AlertCircle, CheckCircle, ExternalLink } from 'lucide-react'
 
 export default function WalletButton() {
   const { user, isLoaded } = useUser()
+  const { getToken } = useAuth()
   const [modalOpen, setModalOpen] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [balance, setBalance] = useState(null)
   const [error, setError] = useState(null)
+  const [userProfile, setUserProfile] = useState(null)
+  const [updating, setUpdating] = useState(false)
+  const [network, setNetwork] = useState(null)
 
-  // Fixed: Correct way to check for wallet and get address
-  const hasWallet = user?.web3Wallets?.length > 0
-  const walletAddress = hasWallet ? user.web3Wallets[0].web3Wallet : null
+  const hasWallet = userProfile?.wallet_id && userProfile.wallet_id !== ''
+  const walletAddress = userProfile?.wallet_id
+
+  // Network configurations
+  const networks = {
+    '0x1': { name: 'Ethereum Mainnet', symbol: 'ETH', isTestnet: false },
+    '0x5': { name: 'Goerli Testnet', symbol: 'GoerliETH', isTestnet: true },
+    '0xaa36a7': { name: 'Sepolia Testnet', symbol: 'SepoliaETH', isTestnet: true },
+    '0x89': { name: 'Polygon Mainnet', symbol: 'MATIC', isTestnet: false },
+    '0x13881': { name: 'Mumbai Testnet', symbol: 'MATIC', isTestnet: true },
+    '0x38': { name: 'BSC Mainnet', symbol: 'BNB', isTestnet: false },
+    '0x61': { name: 'BSC Testnet', symbol: 'tBNB', isTestnet: true },
+    '0xa4b1': { name: 'Arbitrum One', symbol: 'ETH', isTestnet: false },
+    '0x421613': { name: 'Arbitrum Goerli', symbol: 'ETH', isTestnet: true },
+  }
+
+  const fetchUserProfile = async () => {
+    if (!user || !isLoaded) return
+    
+    try {
+      const token = await getToken()
+      
+      const response = await fetch('http://localhost:3000/api/users/profile', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        setUserProfile(data.user)
+        setError(null)
+      } else {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `HTTP ${response.status}`)
+      }
+    } catch (error) {
+      console.error('Error fetching user profile:', error)
+      setError(`Failed to fetch profile: ${error.message}`)
+    }
+  }
+
+  const updateWalletAddress = async (address) => {
+    if (!user || !isLoaded) return false
+    
+    try {
+      setUpdating(true)
+      setError(null)
+      const token = await getToken()
+      
+      const response = await fetch('http://localhost:3000/api/users/wallet', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ walletAddress: address })
+      })
+      
+      if (response.ok) {
+        await fetchUserProfile()
+        return true
+      } else {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to update wallet')
+      }
+    } catch (error) {
+      console.error('Error updating wallet:', error)
+      setError(error.message)
+      return false
+    } finally {
+      setUpdating(false)
+    }
+  }
+
+  const detectNetwork = async () => {
+    if (!window.ethereum) return
+    
+    try {
+      const chainId = await window.ethereum.request({ method: 'eth_chainId' })
+      const networkInfo = networks[chainId] || { 
+        name: 'Unknown Network', 
+        symbol: 'ETH', 
+        isTestnet: false 
+      }
+      setNetwork({ chainId, ...networkInfo })
+    } catch (error) {
+      console.error('Error detecting network:', error)
+    }
+  }
 
   const connectWallet = async () => {
     setError(null)
@@ -38,42 +131,47 @@ export default function WalletButton() {
     try {
       setConnecting(true)
       
-      // Request account access from MetaMask
       await window.ethereum.request({ method: 'eth_requestAccounts' })
       
-      // Get current accounts
       const accounts = await window.ethereum.request({ method: 'eth_accounts' })
       
       if (!accounts || accounts.length === 0) {
         throw new Error('No accounts found in MetaMask')
       }
       
-      // Fixed: Get the first account address
       const selectedAccount = accounts[0]
       
-      // For now, let's use a simplified approach since Clerk's Web3 API has issues
-      // Just store the wallet info and show success
-      console.log('Connected wallet address:', selectedAccount)
+      // Detect network after connecting
+      await detectNetwork()
       
-      // Create a simple message to sign for verification
       const message = `Connect wallet ${selectedAccount} to BlockParty at ${new Date().toISOString()}`
       
-      // Request signature from MetaMask
       const signature = await window.ethereum.request({
         method: 'personal_sign',
         params: [message, selectedAccount]
       })
       
       if (signature) {
-        // For now, we'll just show success
-        // Later you can implement proper Clerk integration or custom backend storage
-        alert(`Wallet connected successfully!\n\nAddress: ${selectedAccount.slice(0,6)}...${selectedAccount.slice(-4)}`)
-        setModalOpen(false)
+        const success = await updateWalletAddress(selectedAccount)
+        
+        if (success) {
+          toast.success('Wallet Connected Successfully!', {
+            description: `Connected ${selectedAccount.slice(0,6)}...${selectedAccount.slice(-4)}`
+          })
+          setModalOpen(false)
+        }
       }
       
     } catch (error) {
       console.error('Error connecting wallet:', error)
-      setError(error.message || 'Failed to connect wallet')
+      const errorMessage = error.code === 4001 
+        ? 'Connection cancelled by user'
+        : error.message || 'Failed to connect wallet'
+      
+      setError(errorMessage)
+      toast.error('Connection Failed', {
+        description: errorMessage
+      })
     } finally {
       setConnecting(false)
     }
@@ -83,6 +181,9 @@ export default function WalletButton() {
     if (!walletAddress || !window.ethereum) return
     
     try {
+      // Detect current network
+      await detectNetwork()
+      
       const balanceHex = await window.ethereum.request({
         method: 'eth_getBalance',
         params: [walletAddress, 'latest']
@@ -95,17 +196,109 @@ export default function WalletButton() {
     }
   }
 
-  // Fetch balance when modal opens and wallet is connected
+  const disconnectWallet = async () => {
+    try {
+      setUpdating(true)
+      const success = await updateWalletAddress('')
+      
+      if (success) {
+        setBalance(null)
+        setNetwork(null)
+        toast.success('Wallet Disconnected', {
+          description: 'Your wallet has been removed from your account'
+        })
+      }
+    } catch (error) {
+      toast.error('Disconnection Failed', {
+        description: 'Failed to disconnect wallet'
+      })
+    } finally {
+      setUpdating(false)
+    }
+  }
+
+  const switchToTestnet = async () => {
+    if (!window.ethereum) return
+    
+    try {
+      // Switch to Sepolia testnet
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0xaa36a7' }], // Sepolia
+      })
+      
+      // Refresh balance after network switch
+      setTimeout(() => {
+        detectNetwork()
+        fetchBalance()
+      }, 1000)
+      
+      toast.success('Switched to Sepolia Testnet', {
+        description: 'You can now see your testnet balance'
+      })
+      
+    } catch (error) {
+      if (error.code === 4902) {
+        // Network not added to MetaMask
+        try {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: '0xaa36a7',
+              chainName: 'Sepolia Testnet',
+              nativeCurrency: {
+                name: 'Sepolia ETH',
+                symbol: 'SepoliaETH',
+                decimals: 18,
+              },
+              rpcUrls: ['https://sepolia.infura.io/v3/'],
+              blockExplorerUrls: ['https://sepolia.etherscan.io/'],
+            }],
+          })
+        } catch (addError) {
+          toast.error('Failed to add Sepolia network')
+        }
+      } else {
+        toast.error('Failed to switch network')
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (isLoaded && user) {
+      fetchUserProfile()
+    }
+  }, [isLoaded, user])
+
   useEffect(() => {
     if (modalOpen && hasWallet) {
+      detectNetwork()
       fetchBalance()
     }
   }, [modalOpen, hasWallet])
 
+  // Listen for network changes
+  useEffect(() => {
+    if (window.ethereum && hasWallet) {
+      const handleChainChanged = (chainId) => {
+        detectNetwork()
+        fetchBalance()
+      }
+      
+      window.ethereum.on('chainChanged', handleChainChanged)
+      
+      return () => {
+        window.ethereum.removeListener('chainChanged', handleChainChanged)
+      }
+    }
+  }, [hasWallet])
+
   const copyAddress = () => {
     if (walletAddress) {
       navigator.clipboard.writeText(walletAddress)
-      alert('Address copied to clipboard!')
+      toast.success('Address Copied!', {
+        description: 'Wallet address copied to clipboard'
+      })
     }
   }
 
@@ -115,7 +308,11 @@ export default function WalletButton() {
   }
 
   if (!isLoaded) {
-    return null
+    return (
+      <Button variant="outline" size="sm" disabled>
+        <Loader2 className="w-4 h-4 animate-spin" />
+      </Button>
+    )
   }
 
   return (
@@ -124,10 +321,10 @@ export default function WalletButton() {
         <Button 
           variant="outline" 
           size="sm" 
-          className="gap-2 text-white hover:bg-gray-800"
+          className="gap-2"
         >
           <Wallet className="w-4 h-4" />
-          Wallet
+          {hasWallet ? formatAddress(walletAddress) : 'Wallet'}
         </Button>
       </DialogTrigger>
       
@@ -140,21 +337,23 @@ export default function WalletButton() {
         </DialogHeader>
         
         <div className="space-y-4">
-          {/* Error Display */}
           {error && (
-            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-800">
+            <div className="flex items-center gap-2 p-3 bg-destructive/15 border border-destructive/20 rounded-lg text-destructive">
               <AlertCircle className="w-4 h-4" />
               <p className="text-sm">{error}</p>
             </div>
           )}
 
           {hasWallet ? (
-            // Show wallet details if connected
             <div className="space-y-4">
               <div className="p-4 bg-muted rounded-lg">
+                <div className="flex items-center gap-2 mb-2">
+                  <CheckCircle className="w-4 h-4 text-green-500" />
+                  <p className="text-sm font-medium">Connected Wallet</p>
+                </div>
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm text-muted-foreground">Wallet Address</p>
+                    <p className="text-sm text-muted-foreground">Address</p>
                     <p className="font-mono text-sm">{formatAddress(walletAddress)}</p>
                   </div>
                   <Button 
@@ -167,32 +366,78 @@ export default function WalletButton() {
                 </div>
               </div>
 
+              {network && (
+                <div className="p-4 bg-muted rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Network</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium">{network.name}</p>
+                        {network.isTestnet && (
+                          <span className="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded-full">
+                            Testnet
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {!network.isTestnet && (
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={switchToTestnet}
+                      >
+                        <ExternalLink className="w-3 h-3 mr-1" />
+                        Testnet
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="p-4 bg-muted rounded-lg">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm text-muted-foreground">ETH Balance</p>
+                    <p className="text-sm text-muted-foreground">Balance</p>
                     <p className="text-lg font-semibold">
-                      {balance !== null ? `${balance} ETH` : 'Loading...'}
+                      {balance !== null ? `${balance} ${network?.symbol || 'ETH'}` : 'Loading...'}
                     </p>
                   </div>
                   <Button 
                     variant="outline" 
                     size="sm"
                     onClick={fetchBalance}
+                    disabled={!window.ethereum}
                   >
                     Refresh
                   </Button>
                 </div>
               </div>
 
+              <div className="flex gap-2">
+                <Button 
+                  variant="outline" 
+                  onClick={disconnectWallet}
+                  disabled={updating}
+                  className="flex-1"
+                >
+                  {updating ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                      Updating...
+                    </>
+                  ) : (
+                    'Disconnect'
+                  )}
+                </Button>
+              </div>
+
               <div className="pt-2">
                 <p className="text-xs text-muted-foreground text-center">
-                  Wallet connected via MetaMask
+                  Wallet connected via MetaMask • {network?.isTestnet ? 'Testnet' : 'Mainnet'} • Stored securely
                 </p>
               </div>
             </div>
           ) : (
-            // Show add wallet button if not connected
             <div className="text-center py-8">
               <Wallet className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
               <h3 className="text-lg font-semibold mb-2">Connect Your Wallet</h3>
@@ -202,7 +447,7 @@ export default function WalletButton() {
               
               <Button 
                 onClick={connectWallet} 
-                disabled={connecting}
+                disabled={connecting || updating}
                 className="w-full gap-2"
               >
                 {connecting ? (
@@ -213,10 +458,14 @@ export default function WalletButton() {
                 ) : (
                   <>
                     <Plus className="w-4 h-4" />
-                    Add Wallet
+                    Connect MetaMask
                   </>
                 )}
               </Button>
+              
+              <p className="text-xs text-muted-foreground mt-4">
+                Make sure MetaMask is installed and unlocked
+              </p>
             </div>
           )}
         </div>

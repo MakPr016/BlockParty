@@ -3,6 +3,8 @@ import cors from 'cors'
 import { ClerkExpressRequireAuth, clerkClient } from '@clerk/clerk-sdk-node'
 import { Octokit } from '@octokit/core'
 import { MongoClient, ObjectId } from 'mongodb'
+import { ethers } from 'ethers'
+import { Webhook } from 'svix'
 import dotenv from 'dotenv'
 
 dotenv.config()
@@ -10,27 +12,75 @@ dotenv.config()
 const app = express()
 const PORT = process.env.PORT || 3000
 
+function validateEnvironmentVariables() {
+  const required = [
+    'MONGODB_URL',
+    'CLERK_SECRET_KEY',
+    'CLERK_WEBHOOK_SECRET',
+    'ETHEREUM_RPC_URL',
+    'PRIVATE_KEY',
+    'FALLBACK_WALLET_ADDRESS'
+  ]
+  
+  const missing = required.filter(key => !process.env[key] || process.env[key].includes('your_'))
+  
+  if (missing.length > 0) {
+    console.error('Missing or invalid environment variables:')
+    missing.forEach(key => {
+      console.error(`   - ${key}: ${process.env[key] || 'not set'}`)
+    })
+    console.error('Please update your .env file with actual values')
+    process.exit(1)
+  }
+  
+  const privateKey = process.env.PRIVATE_KEY
+  if (!/^[0-9a-fA-F]{64}$/.test(privateKey.replace('0x', ''))) {
+    console.error('Invalid PRIVATE_KEY format. Must be 64 characters (hex)')
+    process.exit(1)
+  }
+  
+  console.log('All environment variables are valid')
+}
+
+validateEnvironmentVariables()
+
+let provider, wallet
+
+try {
+  provider = new ethers.JsonRpcProvider(process.env.ETHEREUM_RPC_URL)
+  
+  const privateKey = process.env.PRIVATE_KEY.startsWith('0x') 
+    ? process.env.PRIVATE_KEY 
+    : `0x${process.env.PRIVATE_KEY}`
+    
+  wallet = new ethers.Wallet(privateKey, provider)
+  console.log('Wallet initialized:', wallet.address)
+  
+} catch (error) {
+  console.error('Failed to initialize Ethereum components:', error.message)
+  process.exit(1)
+}
+
 const mongoUrl = process.env.MONGODB_URL
 const dbName = 'blockparty'
 let db
+let mongoConnected = false
 
 MongoClient.connect(mongoUrl).then(client => {
   console.log('Connected to MongoDB')
   db = client.db(dbName)
+  mongoConnected = true
 }).catch(error => {
   console.error('MongoDB connection error:', error)
   process.exit(1)
 })
 
-if (!process.env.CLERK_SECRET_KEY) {
-  console.error('CLERK_SECRET_KEY is missing in .env file')
-  process.exit(1)
-}
-
 app.use(cors({
   origin: ['http://localhost:5173', 'http://localhost:3000'],
   credentials: true
 }))
+
+app.use('/api/webhooks/clerk', express.raw({ type: 'application/json' }))
 
 app.use(express.json({
   verify: (req, res, buf, encoding) => {
@@ -45,15 +95,6 @@ app.use((req, res, next) => {
   next()
 })
 
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString(),
-    clerkConfigured: !!process.env.CLERK_SECRET_KEY,
-    mongoConnected: !!db
-  })
-})
-
 const handleClerkAuth = (req, res, next) => {
   ClerkExpressRequireAuth()(req, res, (err) => {
     if (err) {
@@ -65,6 +106,455 @@ const handleClerkAuth = (req, res, next) => {
     next()
   })
 }
+
+async function createEscrowForBounty(bountyAmountETH, bountyId) {
+  try {
+    console.log(`Creating escrow for bounty ${bountyId} with amount ${bountyAmountETH} ETH`)
+    
+    const walletBalance = await provider.getBalance(wallet.address)
+    const ethBalance = ethers.formatEther(walletBalance)
+    console.log(`Wallet ETH balance: ${ethBalance} ETH`)
+    
+    const amountWei = ethers.parseEther(bountyAmountETH.toString())
+    
+    if (walletBalance < amountWei) {
+      throw new Error(`Insufficient ETH balance. Current: ${ethBalance} ETH, Required: ${bountyAmountETH} ETH`)
+    }
+    
+    console.log(`Escrow created (no actual transfer needed for bounty ${bountyId})`)
+    
+    return {
+      escrowAmount: bountyAmountETH,
+      escrowStatus: 'active',
+      currency: 'ETH',
+      network: 'Sepolia'
+    }
+    
+  } catch (error) {
+    console.error('Error creating escrow:', error)
+    throw new Error(`Failed to create escrow: ${error.message}`)
+  }
+}
+
+async function releaseEscrowForContribution(contributorWalletAddress, bountyAmountETH) {
+  try {
+    console.log(`Releasing ${bountyAmountETH} ETH to ${contributorWalletAddress}`)
+    
+    const walletBalance = await provider.getBalance(wallet.address)
+    const ethBalance = ethers.formatEther(walletBalance)
+    const amountWei = ethers.parseEther(bountyAmountETH.toString())
+    
+    console.log(`Wallet ETH balance: ${ethBalance} ETH`)
+    console.log(`Amount to send: ${bountyAmountETH} ETH`)
+    
+    if (walletBalance < amountWei) {
+      throw new Error(`Insufficient ETH balance. Available: ${ethBalance} ETH, Required: ${bountyAmountETH} ETH`)
+    }
+    
+    console.log('Sending ETH payment...')
+    const tx = await wallet.sendTransaction({
+      to: contributorWalletAddress,
+      value: amountWei,
+      gasLimit: 21000
+    })
+    
+    console.log(`ETH transaction sent: ${tx.hash}`)
+    
+    const receipt = await tx.wait()
+    console.log(`ETH transaction confirmed in block: ${receipt.blockNumber}`)
+    
+    const balanceAfter = await provider.getBalance(wallet.address)
+    console.log(`Wallet ETH balance after: ${ethers.formatEther(balanceAfter)} ETH`)
+    
+    return {
+      releaseTxHash: tx.hash,
+      releaseAmount: bountyAmountETH,
+      releaseStatus: 'completed',
+      blockNumber: receipt.blockNumber,
+      currency: 'ETH'
+    }
+    
+  } catch (error) {
+    console.error('Error releasing escrow:', error)
+    throw new Error(`Failed to release escrow: ${error.message}`)
+  }
+}
+
+async function syncUserToMongoDB(userData) {
+  try {
+    if (!mongoConnected || !db) {
+      console.error('MongoDB not connected yet, skipping user sync')
+      return
+    }
+
+    let walletAddress = ''
+    if (userData.web3_wallets && userData.web3_wallets.length > 0) {
+      const wallet = userData.web3_wallets[0]
+      walletAddress = wallet?.web3_wallet || wallet?.address || wallet?.wallet_address || ''
+      console.log('Extracted wallet address:', walletAddress)
+    }
+
+    const userRecord = {
+      clerk_id: userData.id,
+      email: userData.email_addresses?.[0]?.email_address || null,
+      first_name: userData.first_name || null,
+      last_name: userData.last_name || null,
+      avatar_url: userData.image_url || null,
+      github_username: userData.external_accounts?.find(
+        account => account.provider === 'oauth_github'
+      )?.username || null,
+      wallet_id: walletAddress,
+      updated_at: new Date()
+    }
+
+    const result = await db.collection('users').updateOne(
+      { clerk_id: userData.id },
+      { 
+        $set: userRecord,
+        $setOnInsert: { created_at: new Date() }
+      },
+      { upsert: true }
+    )
+
+    if (result.upsertedCount > 0) {
+      console.log('New user created:', userRecord.clerk_id)
+    } else if (result.modifiedCount > 0) {
+      console.log('User updated:', userRecord.clerk_id)
+    }
+
+  } catch (error) {
+    console.error('Error syncing user to MongoDB:', error)
+  }
+}
+
+async function getUserByGitHubUsername(username) {
+  try {
+    const user = await db.collection('users').findOne({ 
+      github_username: username 
+    })
+    return user
+  } catch (error) {
+    console.error('Error fetching user by GitHub username:', error)
+    return null
+  }
+}
+
+async function handleMergedPR(payload) {
+  try {
+    const pr = payload.pull_request
+    const repository = payload.repository
+    
+    console.log(`Processing merged PR: ${pr.title} in ${repository.full_name}`)
+    
+    const bounty = await db.collection('bounties').findOne({
+      repositoryFullName: repository.full_name,
+      status: 'active',
+      escrowStatus: 'active'
+    })
+    
+    if (!bounty) {
+      console.log(`No active bounty found for repository: ${repository.full_name}`)
+      return
+    }
+    
+    console.log(`Found bounty: ${bounty.title} (${bounty.amount} ETH)`)
+    
+    const contributorUsername = pr.user.login
+    const contributorUser = await getUserByGitHubUsername(contributorUsername)
+    
+    if (!contributorUser || !contributorUser.wallet_id) {
+      console.log(`Contributor ${contributorUsername} has no wallet address, using fallback`)
+    }
+    
+    const paymentAddress = contributorUser?.wallet_id || process.env.FALLBACK_WALLET_ADDRESS
+    console.log(`Payment will be sent to: ${paymentAddress}`)
+    
+    const contributionData = {
+      bountyId: bounty._id,
+      contributor_username: contributorUsername,
+      contributor_email: pr.user.email || null,
+      contributor_id: pr.user.id,
+      contributor_avatar: pr.user.avatar_url,
+      contributor_wallet: paymentAddress,
+      pr_number: pr.number,
+      pr_title: pr.title,
+      pr_url: pr.html_url,
+      pr_additions: pr.additions || 0,
+      pr_deletions: pr.deletions || 0,
+      pr_commits: pr.commits || 1,
+      repository_name: repository.name,
+      repository_full_name: repository.full_name,
+      repository_url: repository.html_url,
+      merged_at: new Date(pr.merged_at),
+      merged_by: pr.merged_by?.login,
+      payment_status: 'pending',
+      created_at: new Date()
+    }
+    
+    const contributionResult = await db.collection('contributions').insertOne(contributionData)
+    console.log(`Contribution recorded with ID: ${contributionResult.insertedId}`)
+    
+    try {
+      console.log(`Initiating ETH payment for ${bounty.amount} ETH...`)
+      const escrowReleaseInfo = await releaseEscrowForContribution(paymentAddress, bounty.amount)
+      
+      await db.collection('contributions').updateOne(
+        { _id: contributionResult.insertedId },
+        {
+          $set: {
+            payment_status: 'completed',
+            payment_tx_hash: escrowReleaseInfo.releaseTxHash,
+            payment_amount: escrowReleaseInfo.releaseAmount,
+            payment_currency: 'ETH',
+            payment_block_number: escrowReleaseInfo.blockNumber,
+            payment_completed_at: new Date()
+          }
+        }
+      )
+      
+      await db.collection('bounties').updateOne(
+        { _id: bounty._id },
+        { 
+          $set: { 
+            status: 'completed',
+            escrowStatus: 'released',
+            completedAt: new Date(),
+            completedBy: contributorUsername,
+            contributionId: contributionResult.insertedId,
+            paymentInfo: escrowReleaseInfo,
+            updatedAt: new Date()
+          }
+        }
+      )
+      
+      console.log(`SUCCESS: Bounty ${bounty._id} completed and ${bounty.amount} ETH sent to ${paymentAddress}`)
+      console.log(`Transaction hash: ${escrowReleaseInfo.releaseTxHash}`)
+      
+    } catch (paymentError) {
+      console.error('Payment release failed:', paymentError)
+      
+      await db.collection('contributions').updateOne(
+        { _id: contributionResult.insertedId },
+        {
+          $set: {
+            payment_status: 'failed',
+            payment_error: paymentError.message,
+            payment_failed_at: new Date()
+          }
+        }
+      )
+      
+      await db.collection('bounties').updateOne(
+        { _id: bounty._id },
+        {
+          $set: {
+            status: 'payment_failed',
+            escrowStatus: 'release_failed',
+            paymentError: paymentError.message,
+            updatedAt: new Date()
+          }
+        }
+      )
+    }
+    
+  } catch (error) {
+    console.error('Error handling merged PR:', error)
+  }
+}
+
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    clerkConfigured: !!process.env.CLERK_SECRET_KEY,
+    mongoConnected: mongoConnected,
+    ethereumConfigured: !!process.env.ETHEREUM_RPC_URL,
+    webhookSecretConfigured: !!process.env.CLERK_WEBHOOK_SECRET,
+    walletAddress: wallet?.address || 'Not initialized',
+    paymentCurrency: 'ETH',
+    network: 'Sepolia'
+  })
+})
+
+app.get('/api/wallet/balance', async (req, res) => {
+  try {
+    const balance = await provider.getBalance(wallet.address)
+    const blockNumber = await provider.getBlockNumber()
+    
+    res.json({
+      walletAddress: wallet.address,
+      balance: ethers.formatEther(balance),
+      currency: 'ETH',
+      network: 'Sepolia',
+      blockNumber: blockNumber
+    })
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to get wallet balance',
+      details: error.message
+    })
+  }
+})
+
+app.post('/api/webhooks/clerk', async (req, res) => {
+  const WEBHOOK_SECRET = process.env.CLERK_WEBHOOK_SECRET
+
+  if (!WEBHOOK_SECRET) {
+    throw new Error('Please add CLERK_WEBHOOK_SECRET from Clerk Dashboard to .env')
+  }
+
+  const headerPayload = req.headers
+  const svix_id = headerPayload['svix-id']
+  const svix_timestamp = headerPayload['svix-timestamp']
+  const svix_signature = headerPayload['svix-signature']
+
+  if (!svix_id || !svix_timestamp || !svix_signature) {
+    return res.status(400).json({
+      success: false,
+      message: 'Error occurred -- no svix headers'
+    })
+  }
+
+  const payload = req.body
+  const body = payload.toString()
+
+  const wh = new Webhook(WEBHOOK_SECRET)
+  let evt
+
+  try {
+    evt = wh.verify(body, {
+      'svix-id': svix_id,
+      'svix-timestamp': svix_timestamp,
+      'svix-signature': svix_signature
+    })
+  } catch (err) {
+    console.error('Error verifying webhook:', err)
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    })
+  }
+
+  const { id } = evt.data
+  const eventType = evt.type
+
+  console.log(`Webhook with ID of ${id} and type of ${eventType}`)
+
+  if (eventType === 'user.created' || eventType === 'user.updated') {
+    await syncUserToMongoDB(evt.data)
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: 'Webhook processed successfully'
+  })
+})
+
+app.patch('/api/users/wallet', handleClerkAuth, async (req, res) => {
+  try {
+    const userId = req.auth.userId
+    const { walletAddress } = req.body
+    
+    if (!walletAddress || !ethers.isAddress(walletAddress)) {
+      return res.status(400).json({
+        error: 'Valid wallet address is required'
+      })
+    }
+    
+    const result = await db.collection('users').updateOne(
+      { clerk_id: userId },
+      { 
+        $set: { 
+          wallet_id: walletAddress,
+          updated_at: new Date()
+        }
+      }
+    )
+    
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        error: 'User not found'
+      })
+    }
+    
+    res.json({
+      success: true,
+      message: 'Wallet address updated successfully'
+    })
+    
+  } catch (error) {
+    res.status(500).json({
+      error: 'Server error',
+      details: error.message
+    })
+  }
+})
+
+app.get('/api/users/profile', handleClerkAuth, async (req, res) => {
+  try {
+    const userId = req.auth.userId
+    
+    const user = await db.collection('users').findOne({ 
+      clerk_id: userId 
+    })
+    
+    if (!user) {
+      return res.status(404).json({
+        error: 'User not found'
+      })
+    }
+    
+    res.json({ user })
+    
+  } catch (error) {
+    res.status(500).json({
+      error: 'Server error',
+      details: error.message
+    })
+  }
+})
+
+app.get('/api/debug/users', async (req, res) => {
+  try {
+    if (!mongoConnected || !db) {
+      return res.status(500).json({ error: 'MongoDB not connected' })
+    }
+    
+    const users = await db.collection('users').find({}).toArray()
+    const count = await db.collection('users').countDocuments()
+    
+    res.json({
+      count: count,
+      users: users
+    })
+  } catch (error) {
+    res.status(500).json({
+      error: 'Server error',
+      details: error.message
+    })
+  }
+})
+
+app.get('/api/admin/payment-logs', handleClerkAuth, async (req, res) => {
+  try {
+    const { limit = 50, skip = 0 } = req.query
+    
+    const contributions = await db.collection('contributions')
+      .find({})
+      .sort({ created_at: -1 })
+      .limit(parseInt(limit))
+      .skip(parseInt(skip))
+      .toArray()
+    
+    res.json({ contributions })
+    
+  } catch (error) {
+    res.status(500).json({
+      error: 'Server error',
+      details: error.message
+    })
+  }
+})
 
 app.get('/api/repositories', handleClerkAuth, async (req, res) => {
   try {
@@ -89,7 +579,7 @@ app.get('/api/repositories', handleClerkAuth, async (req, res) => {
         'X-GitHub-Api-Version': '2022-11-28'
       }
     })
-    res.json({repositories: repos});
+    res.json({repositories: repos})
     
   } catch (error) {
     if (error.status === 401) {
@@ -438,63 +928,6 @@ app.post('/api/webhook/callback', async (req, res) => {
   }
 })
 
-async function handleMergedPR(payload) {
-  try {
-    const pr = payload.pull_request
-    const repository = payload.repository
-    
-    const bounty = await db.collection('bounties').findOne({
-      repositoryFullName: repository.full_name,
-      status: 'active'
-    })
-    
-    if (!bounty) {
-      console.log(`No active bounty found for repository: ${repository.full_name}`)
-      return
-    }
-    
-    const contributionData = {
-      bountyId: bounty._id,
-      contributor_username: pr.user.login,
-      contributor_email: pr.user.email || null,
-      contributor_id: pr.user.id,
-      contributor_avatar: pr.user.avatar_url,
-      pr_number: pr.number,
-      pr_title: pr.title,
-      pr_url: pr.html_url,
-      pr_additions: pr.additions || 0,
-      pr_deletions: pr.deletions || 0,
-      pr_commits: pr.commits || 1,
-      repository_name: repository.name,
-      repository_full_name: repository.full_name,
-      repository_url: repository.html_url,
-      merged_at: new Date(pr.merged_at),
-      merged_by: pr.merged_by?.login,
-      created_at: new Date()
-    }
-    
-    const contributionResult = await db.collection('contributions').insertOne(contributionData)
-    
-    await db.collection('bounties').updateOne(
-      { _id: bounty._id },
-      { 
-        $set: { 
-          status: 'completed',
-          completedAt: new Date(),
-          completedBy: pr.user.login,
-          contributionId: contributionResult.insertedId,
-          updatedAt: new Date()
-        }
-      }
-    )
-    
-    console.log(`Bounty completed for repository: ${repository.full_name} by ${pr.user.login}`)
-    
-  } catch (error) {
-    console.error('Error handling merged PR:', error)
-  }
-}
-
 app.get('/api/webhooks', handleClerkAuth, async (req, res) => {
   try {
     const userId = req.auth.userId
@@ -514,23 +947,101 @@ app.get('/api/webhooks', handleClerkAuth, async (req, res) => {
 
 app.post('/api/bounties', handleClerkAuth, async (req, res) => {
   try {
+    console.log('=== BOUNTY CREATION REQUEST ===')
+    console.log('Request body:', JSON.stringify(req.body, null, 2))
+    
     const userId = req.auth.userId
+    const { title, description, amount, repositoryFullName, requirements } = req.body
+    
+    console.log('Extracted data:', { title, description, amount, repositoryFullName, requirements })
+    
+    if (!title || !description || !amount || !repositoryFullName) {
+      return res.status(400).json({
+        error: 'Missing required fields: title, description, amount, repositoryFullName'
+      })
+    }
+    
+    if (!amount || amount <= 0) {
+      return res.status(400).json({
+        error: 'Amount must be a positive number'
+      })
+    }
+    
     const bountyData = {
-      ...req.body,
+      title,
+      description,
+      amount: parseFloat(amount),
+      currency: 'ETH',
+      repositoryFullName,
+      requirements: requirements || [],
       createdBy: userId,
       status: 'active',
       applicants: [],
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
+      escrowStatus: 'pending',
+      escrowAmount: null,
+      escrowCreatedAt: null
     }
     
+    console.log('Inserting bounty into database...')
     const result = await db.collection('bounties').insertOne(bountyData)
+    const bountyId = result.insertedId
     
-    res.json({
-      success: true,
-      bountyId: result.insertedId
-    })
+    console.log(`Created bounty ${bountyId}, now creating escrow...`)
+    
+    try {
+      console.log(`Attempting to create escrow for ${amount} ETH...`)
+      const escrowInfo = await createEscrowForBounty(amount, bountyId)
+      
+      console.log('Escrow created successfully, updating bounty record...')
+      await db.collection('bounties').updateOne(
+        { _id: bountyId },
+        {
+          $set: {
+            escrowStatus: 'active',
+            escrowAmount: escrowInfo.escrowAmount,
+            escrowCurrency: 'ETH',
+            escrowCreatedAt: new Date(),
+            updatedAt: new Date()
+          }
+        }
+      )
+      
+      console.log(`SUCCESS: Escrow created successfully for bounty ${bountyId}`)
+      console.log('Escrow info:', escrowInfo)
+      
+      res.json({
+        success: true,
+        bountyId: bountyId,
+        escrowInfo: escrowInfo,
+        message: 'Bounty and escrow created successfully'
+      })
+      
+    } catch (escrowError) {
+      console.error('ESCROW ERROR:', escrowError)
+      
+      await db.collection('bounties').updateOne(
+        { _id: bountyId },
+        {
+          $set: {
+            status: 'escrow_failed',
+            escrowStatus: 'failed',
+            escrowError: escrowError.message,
+            updatedAt: new Date()
+          }
+        }
+      )
+      
+      return res.status(500).json({
+        error: 'Bounty created but escrow setup failed',
+        details: escrowError.message,
+        bountyId: bountyId
+      })
+    }
+    
   } catch (error) {
+    console.error('BOUNTY CREATION ERROR:', error)
     res.status(500).json({ 
       error: 'Failed to create bounty',
       details: error.message 
@@ -541,7 +1052,10 @@ app.post('/api/bounties', handleClerkAuth, async (req, res) => {
 app.get('/api/bounties', handleClerkAuth, async (req, res) => {
   try {
     const bounties = await db.collection('bounties')
-      .find({ status: { $ne: 'completed' } })
+      .find({ 
+        status: { $nin: ['completed', 'escrow_failed'] },
+        escrowStatus: 'active'
+      })
       .sort({ createdAt: -1 })
       .toArray()
     
@@ -753,4 +1267,7 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`)
   console.log(`Health check: http://localhost:${PORT}/health`)
+  console.log(`Wallet balance: http://localhost:${PORT}/api/wallet/balance`)
+  console.log(`Wallet address: ${wallet.address}`)
+  console.log('Payment currency: ETH (Sepolia)')
 })
