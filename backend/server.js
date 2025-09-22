@@ -84,6 +84,7 @@ app.get('/api/repositories', handleClerkAuth, async (req, res) => {
       sort: 'updated',
       per_page: 50,
       affiliation: 'owner',
+      visibility : 'public',
       headers: {
         'X-GitHub-Api-Version': '2022-11-28'
       }

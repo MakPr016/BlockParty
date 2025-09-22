@@ -197,8 +197,6 @@ export default function Dashboard() {
             </Card>
           </div>
 
-          {/* Bounties section */}
-          <MyBounties />
           {/* Repositories Section with Search and Filters */}
           <Card>
             <CardHeader>
@@ -443,6 +441,10 @@ export default function Dashboard() {
               )}
             </CardContent>
           </Card>
+
+          
+          {/* Bounties section */}
+          <MyBounties />
         </div>
       </main>
     </div>
