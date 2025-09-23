@@ -73,13 +73,15 @@ try {
   const escrowABI = [
     "function deposit(uint256 amount) external",
     "function release(address recipient, uint256 amount) external",
+    "function releaseOnBehalf(address from, address recipient, uint256 amount) external",
     "function withdraw() external",
     "function withdraw(uint256 amount) external",
     "function escrowBalance(address account) view returns (uint256)",
     "function getTotalEscrowed() view returns (uint256)",
     "function setAuthorized(address account, bool status) external",
     "function authorized(address account) view returns (bool)",
-    "function owner() view returns (address)"
+    "function owner() view returns (address)",
+    "function canRelease(address from, uint256 amount) view returns (bool)"
   ]
   
   tokenContract = new ethers.Contract(process.env.GTK_TOKEN_ADDRESS, tokenABI, wallet)
@@ -190,37 +192,27 @@ async function createEscrowForBounty(bountyCreatorUserId, bountyAmountGTK, bount
 
 async function releaseEscrowForContribution(contributorWalletAddress, bountyAmountGTK, bountyCreatorUserId) {
   try {
-    console.log(`Releasing ${bountyAmountGTK} GTK to ${contributorWalletAddress}`)
-    
-    const creator = await db.collection('users').findOne({ clerk_id: bountyCreatorUserId })
-    if (!creator || !creator.wallet_id) {
-      throw new Error('Bounty creator wallet not found')
-    }
-    
-    const creatorAddress = creator.wallet_id
     const amountWei = ethers.parseEther(bountyAmountGTK.toString())
     
-    const isAuthorized = await escrowContract.authorized(wallet.address)
-    console.log(`Backend wallet authorized: ${isAuthorized}`)
-    
-    if (!isAuthorized) {
-      throw new Error('Backend wallet is not authorized to release funds. Please authorize it first.')
+    const bountyCreator = await db.collection('users').findOne({ clerk_id: bountyCreatorUserId })
+    if (!bountyCreator || !bountyCreator.wallet_id) {
+      throw new Error('Bounty creator wallet address not found')
     }
     
-    const escrowBalance = await escrowContract.escrowBalance(creatorAddress)
-    console.log(`Creator's escrow balance: ${ethers.formatEther(escrowBalance)} GTK`)
+    const creatorEscrowBalance = await escrowContract.escrowBalance(bountyCreator.wallet_id)
+    console.log(`Bounty creator escrow balance: ${ethers.formatEther(creatorEscrowBalance)} GTK`)
     
-    if (escrowBalance < amountWei) {
-      throw new Error(`Insufficient escrowed GTK. Available: ${ethers.formatEther(escrowBalance)} GTK, Required: ${bountyAmountGTK} GTK`)
+    if (creatorEscrowBalance < amountWei) {
+      throw new Error(`Bounty creator needs ${bountyAmountGTK} GTK in escrow to make payments`)
     }
     
-    console.log('Releasing GTK tokens from escrow...')
-    const tx = await escrowContract.release(contributorWalletAddress, amountWei)
-    
-    console.log(`GTK release transaction sent: ${tx.hash}`)
+    const tx = await escrowContract.releaseOnBehalf(
+      bountyCreator.wallet_id,
+      contributorWalletAddress,
+      amountWei
+    )
     
     const receipt = await tx.wait()
-    console.log(`GTK transaction confirmed in block: ${receipt.blockNumber}`)
     
     return {
       releaseTxHash: tx.hash,
@@ -231,7 +223,6 @@ async function releaseEscrowForContribution(contributorWalletAddress, bountyAmou
     }
     
   } catch (error) {
-    console.error('Error releasing GTK escrow:', error)
     throw new Error(`Failed to release GTK escrow: ${error.message}`)
   }
 }
