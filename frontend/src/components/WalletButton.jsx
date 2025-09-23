@@ -10,7 +10,7 @@ import {
   DialogTrigger 
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
-import { Wallet, Plus, Copy, Loader2, AlertCircle, CheckCircle, ExternalLink } from 'lucide-react'
+import { Wallet, Plus, Copy, Loader2, AlertCircle, CheckCircle, ExternalLink, Coins } from 'lucide-react'
 
 export default function WalletButton() {
   const { user, isLoaded } = useUser()
@@ -18,6 +18,8 @@ export default function WalletButton() {
   const [modalOpen, setModalOpen] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [balance, setBalance] = useState(null)
+  const [gtkBalance, setGtkBalance] = useState(null)
+  const [escrowBalance, setEscrowBalance] = useState(null)
   const [error, setError] = useState(null)
   const [userProfile, setUserProfile] = useState(null)
   const [updating, setUpdating] = useState(false)
@@ -26,26 +28,13 @@ export default function WalletButton() {
   const hasWallet = userProfile?.wallet_id && userProfile.wallet_id !== ''
   const walletAddress = userProfile?.wallet_id
 
-  // Network configurations
-  const networks = {
-    '0x1': { name: 'Ethereum Mainnet', symbol: 'ETH', isTestnet: false },
-    '0x5': { name: 'Goerli Testnet', symbol: 'GoerliETH', isTestnet: true },
-    '0xaa36a7': { name: 'Sepolia Testnet', symbol: 'SepoliaETH', isTestnet: true },
-    '0x89': { name: 'Polygon Mainnet', symbol: 'MATIC', isTestnet: false },
-    '0x13881': { name: 'Mumbai Testnet', symbol: 'MATIC', isTestnet: true },
-    '0x38': { name: 'BSC Mainnet', symbol: 'BNB', isTestnet: false },
-    '0x61': { name: 'BSC Testnet', symbol: 'tBNB', isTestnet: true },
-    '0xa4b1': { name: 'Arbitrum One', symbol: 'ETH', isTestnet: false },
-    '0x421613': { name: 'Arbitrum Goerli', symbol: 'ETH', isTestnet: true },
-  }
-
   const fetchUserProfile = async () => {
     if (!user || !isLoaded) return
     
     try {
       const token = await getToken()
       
-      const response = await fetch('http://localhost:3000/api/users/profile', {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/users/profile`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -66,36 +55,98 @@ export default function WalletButton() {
     }
   }
 
-  const updateWalletAddress = async (address) => {
-    if (!user || !isLoaded) return false
+  const fetchGTKBalance = async () => {
+    if (!hasWallet) return
     
     try {
-      setUpdating(true)
-      setError(null)
       const token = await getToken()
-      
-      const response = await fetch('http://localhost:3000/api/users/wallet', {
-        method: 'PATCH',
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/users/gtk-balance`, {
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ walletAddress: address })
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
       })
       
       if (response.ok) {
-        await fetchUserProfile()
-        return true
-      } else {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to update wallet')
+        const data = await response.json()
+        setGtkBalance(data.gtkBalance)
+        setEscrowBalance(data.escrowBalance)
       }
     } catch (error) {
-      console.error('Error updating wallet:', error)
-      setError(error.message)
-      return false
-    } finally {
-      setUpdating(false)
+      console.error('Error fetching GTK balance:', error)
+      setGtkBalance('Error')
+      setEscrowBalance('Error')
+    }
+  }
+
+  const addGTKTokenToMetaMask = async () => {
+    if (!window.ethereum) return
+    
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/health`)
+      const data = await response.json()
+      
+      await window.ethereum.request({
+        method: 'wallet_watchAsset',
+        params: {
+          type: 'ERC20',
+          options: {
+            address: data.gtkTokenAddress,
+            symbol: 'GTK',
+            decimals: 18,
+            image: 'https://via.placeholder.com/32x32.png'
+          }
+        }
+      })
+      
+      toast.success('GTK Token Added!', {
+        description: 'GTK token has been added to your MetaMask wallet'
+      })
+    } catch (error) {
+      toast.error('Failed to add GTK token to MetaMask')
+    }
+  }
+
+  const switchToSepolia = async () => {
+    if (!window.ethereum) return
+    
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0xaa36a7' }]
+      })
+      
+      setTimeout(() => {
+        detectNetwork()
+        fetchBalance()
+        fetchGTKBalance()
+      }, 1000)
+      
+      toast.success('Switched to Sepolia Testnet')
+      
+    } catch (error) {
+      if (error.code === 4902) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: '0xaa36a7',
+              chainName: 'Sepolia Testnet',
+              nativeCurrency: {
+                name: 'Sepolia ETH',
+                symbol: 'SepoliaETH',
+                decimals: 18
+              },
+              rpcUrls: ['https://sepolia.infura.io/v3/'],
+              blockExplorerUrls: ['https://sepolia.etherscan.io/']
+            }]
+          })
+        } catch (addError) {
+          toast.error('Failed to add Sepolia network')
+        }
+      } else {
+        toast.error('Failed to switch network')
+      }
     }
   }
 
@@ -104,12 +155,12 @@ export default function WalletButton() {
     
     try {
       const chainId = await window.ethereum.request({ method: 'eth_chainId' })
-      const networkInfo = networks[chainId] || { 
-        name: 'Unknown Network', 
-        symbol: 'ETH', 
-        isTestnet: false 
-      }
-      setNetwork({ chainId, ...networkInfo })
+      const isSepolia = chainId === '0xaa36a7'
+      setNetwork({ 
+        chainId, 
+        name: isSepolia ? 'Sepolia Testnet' : 'Other Network',
+        isSepolia 
+      })
     } catch (error) {
       console.error('Error detecting network:', error)
     }
@@ -141,10 +192,9 @@ export default function WalletButton() {
       
       const selectedAccount = accounts[0]
       
-      // Detect network after connecting
       await detectNetwork()
       
-      const message = `Connect wallet ${selectedAccount} to BlockParty at ${new Date().toISOString()}`
+      const message = `Connect wallet ${selectedAccount} to BlockParty GTK at ${new Date().toISOString()}`
       
       const signature = await window.ethereum.request({
         method: 'personal_sign',
@@ -177,13 +227,43 @@ export default function WalletButton() {
     }
   }
 
+  const updateWalletAddress = async (address) => {
+    if (!user || !isLoaded) return false
+    
+    try {
+      setUpdating(true)
+      setError(null)
+      const token = await getToken()
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/users/wallet`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ walletAddress: address })
+      })
+      
+      if (response.ok) {
+        await fetchUserProfile()
+        return true
+      } else {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to update wallet')
+      }
+    } catch (error) {
+      console.error('Error updating wallet:', error)
+      setError(error.message)
+      return false
+    } finally {
+      setUpdating(false)
+    }
+  }
+
   const fetchBalance = async () => {
     if (!walletAddress || !window.ethereum) return
     
     try {
-      // Detect current network
-      await detectNetwork()
-      
       const balanceHex = await window.ethereum.request({
         method: 'eth_getBalance',
         params: [walletAddress, 'latest']
@@ -203,6 +283,8 @@ export default function WalletButton() {
       
       if (success) {
         setBalance(null)
+        setGtkBalance(null)
+        setEscrowBalance(null)
         setNetwork(null)
         toast.success('Wallet Disconnected', {
           description: 'Your wallet has been removed from your account'
@@ -217,53 +299,6 @@ export default function WalletButton() {
     }
   }
 
-  const switchToTestnet = async () => {
-    if (!window.ethereum) return
-    
-    try {
-      // Switch to Sepolia testnet
-      await window.ethereum.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: '0xaa36a7' }], // Sepolia
-      })
-      
-      // Refresh balance after network switch
-      setTimeout(() => {
-        detectNetwork()
-        fetchBalance()
-      }, 1000)
-      
-      toast.success('Switched to Sepolia Testnet', {
-        description: 'You can now see your testnet balance'
-      })
-      
-    } catch (error) {
-      if (error.code === 4902) {
-        // Network not added to MetaMask
-        try {
-          await window.ethereum.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: '0xaa36a7',
-              chainName: 'Sepolia Testnet',
-              nativeCurrency: {
-                name: 'Sepolia ETH',
-                symbol: 'SepoliaETH',
-                decimals: 18,
-              },
-              rpcUrls: ['https://sepolia.infura.io/v3/'],
-              blockExplorerUrls: ['https://sepolia.etherscan.io/'],
-            }],
-          })
-        } catch (addError) {
-          toast.error('Failed to add Sepolia network')
-        }
-      } else {
-        toast.error('Failed to switch network')
-      }
-    }
-  }
-
   useEffect(() => {
     if (isLoaded && user) {
       fetchUserProfile()
@@ -274,15 +309,16 @@ export default function WalletButton() {
     if (modalOpen && hasWallet) {
       detectNetwork()
       fetchBalance()
+      fetchGTKBalance()
     }
   }, [modalOpen, hasWallet])
 
-  // Listen for network changes
   useEffect(() => {
     if (window.ethereum && hasWallet) {
       const handleChainChanged = (chainId) => {
         detectNetwork()
         fetchBalance()
+        fetchGTKBalance()
       }
       
       window.ethereum.on('chainChanged', handleChainChanged)
@@ -325,14 +361,19 @@ export default function WalletButton() {
         >
           <Wallet className="w-4 h-4" />
           {hasWallet ? formatAddress(walletAddress) : 'Wallet'}
+          {hasWallet && gtkBalance && parseFloat(gtkBalance) > 0 && (
+            <span className="bg-primary text-primary-foreground px-1.5 py-0.5 text-xs rounded-full">
+              {parseFloat(gtkBalance).toFixed(2)} GTK
+            </span>
+          )}
         </Button>
       </DialogTrigger>
       
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Your Wallet</DialogTitle>
+          <DialogTitle>GTK Wallet</DialogTitle>
           <DialogDescription>
-            Connect or manage your Web3 wallet for bounty payments
+            Connect your wallet to use GTK tokens for bounties
           </DialogDescription>
         </DialogHeader>
         
@@ -373,44 +414,91 @@ export default function WalletButton() {
                       <p className="text-sm text-muted-foreground">Network</p>
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-medium">{network.name}</p>
-                        {network.isTestnet && (
+                        {network.isSepolia ? (
+                          <span className="px-2 py-1 text-xs bg-green-100 text-green-800 rounded-full">
+                            Sepolia
+                          </span>
+                        ) : (
                           <span className="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded-full">
-                            Testnet
+                            Wrong Network
                           </span>
                         )}
                       </div>
                     </div>
-                    {!network.isTestnet && (
+                    {!network.isSepolia && (
                       <Button 
                         variant="outline" 
                         size="sm"
-                        onClick={switchToTestnet}
+                        onClick={switchToSepolia}
                       >
                         <ExternalLink className="w-3 h-3 mr-1" />
-                        Testnet
+                        Sepolia
                       </Button>
                     )}
                   </div>
                 </div>
               )}
 
-              <div className="p-4 bg-muted rounded-lg">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Balance</p>
-                    <p className="text-lg font-semibold">
-                      {balance !== null ? `${balance} ${network?.symbol || 'ETH'}` : 'Loading...'}
-                    </p>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 bg-muted rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground">ETH Balance</p>
+                      <p className="text-lg font-semibold">
+                        {balance !== null ? `${balance} ETH` : 'Loading...'}
+                      </p>
+                    </div>
                   </div>
-                  <Button 
-                    variant="outline" 
-                    size="sm"
-                    onClick={fetchBalance}
-                    disabled={!window.ethereum}
-                  >
-                    Refresh
-                  </Button>
                 </div>
+
+                <div className="p-4 bg-primary/10 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground flex items-center gap-1">
+                        <Coins className="w-3 h-3" />
+                        GTK Balance
+                      </p>
+                      <p className="text-lg font-semibold text-primary">
+                        {gtkBalance !== null ? `${parseFloat(gtkBalance).toFixed(2)} GTK` : 'Loading...'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {escrowBalance && parseFloat(escrowBalance) > 0 && (
+                <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-blue-600">Escrowed GTK</p>
+                      <p className="text-lg font-semibold text-blue-800">
+                        {parseFloat(escrowBalance).toFixed(2)} GTK
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-blue-600 mt-1">
+                    Tokens locked in active bounties
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Button 
+                  variant="outline" 
+                  onClick={addGTKTokenToMetaMask}
+                  className="flex-1"
+                  size="sm"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add GTK Token
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={fetchGTKBalance}
+                  size="sm"
+                >
+                  Refresh
+                </Button>
               </div>
 
               <div className="flex gap-2">
@@ -433,16 +521,19 @@ export default function WalletButton() {
 
               <div className="pt-2">
                 <p className="text-xs text-muted-foreground text-center">
-                  Wallet connected via MetaMask • {network?.isTestnet ? 'Testnet' : 'Mainnet'} • Stored securely
+                  GTK tokens on Sepolia Testnet • {gtkBalance && `${parseFloat(gtkBalance).toFixed(4)} GTK available`}
                 </p>
               </div>
             </div>
           ) : (
             <div className="text-center py-8">
-              <Wallet className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+              <div className="flex items-center justify-center gap-2 mb-4">
+                <Wallet className="w-8 h-8 text-muted-foreground" />
+                <Coins className="w-8 h-8 text-primary" />
+              </div>
               <h3 className="text-lg font-semibold mb-2">Connect Your Wallet</h3>
               <p className="text-muted-foreground mb-6">
-                Link your MetaMask wallet to enable Web3 features and receive bounty payments
+                Link your MetaMask wallet to use GTK tokens for bounties
               </p>
               
               <Button 
@@ -464,7 +555,7 @@ export default function WalletButton() {
               </Button>
               
               <p className="text-xs text-muted-foreground mt-4">
-                Make sure MetaMask is installed and unlocked
+                Make sure MetaMask is installed and connected to Sepolia testnet
               </p>
             </div>
           )}

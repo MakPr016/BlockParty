@@ -163,7 +163,7 @@ export default function MyBounties() {
                     <div className="flex items-center gap-4 text-sm text-muted-foreground">
                       <span className="flex items-center gap-1 font-semibold text-green-600">
                         <DollarSign className="w-4 h-4" />
-                        {bounty.prize} {bounty.currency}
+                        {bounty.amount} {bounty.currency}
                       </span>
                       <span className="flex items-center gap-1">
                         <Calendar className="w-4 h-4" />

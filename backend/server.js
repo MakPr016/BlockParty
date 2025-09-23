@@ -19,7 +19,9 @@ function validateEnvironmentVariables() {
     'CLERK_WEBHOOK_SECRET',
     'ETHEREUM_RPC_URL',
     'PRIVATE_KEY',
-    'FALLBACK_WALLET_ADDRESS'
+    'FALLBACK_WALLET_ADDRESS',
+    'GTK_TOKEN_ADDRESS',
+    'ESCROW_CONTRACT_ADDRESS'
   ]
   
   const missing = required.filter(key => !process.env[key] || process.env[key].includes('your_'))
@@ -44,7 +46,7 @@ function validateEnvironmentVariables() {
 
 validateEnvironmentVariables()
 
-let provider, wallet
+let provider, wallet, tokenContract, escrowContract
 
 try {
   provider = new ethers.JsonRpcProvider(process.env.ETHEREUM_RPC_URL)
@@ -55,6 +57,36 @@ try {
     
   wallet = new ethers.Wallet(privateKey, provider)
   console.log('Wallet initialized:', wallet.address)
+  
+  const tokenABI = [
+    "function balanceOf(address owner) view returns (uint256)",
+    "function transfer(address to, uint256 amount) returns (bool)",
+    "function transferFrom(address from, address to, uint256 amount) returns (bool)",
+    "function approve(address spender, uint256 amount) returns (bool)",
+    "function allowance(address owner, address spender) view returns (uint256)",
+    "function name() view returns (string)",
+    "function symbol() view returns (string)",
+    "function decimals() view returns (uint8)",
+    "function totalSupply() view returns (uint256)"
+  ]
+  
+  const escrowABI = [
+    "function deposit(uint256 amount) external",
+    "function release(address recipient, uint256 amount) external",
+    "function withdraw() external",
+    "function withdraw(uint256 amount) external",
+    "function escrowBalance(address account) view returns (uint256)",
+    "function getTotalEscrowed() view returns (uint256)",
+    "function setAuthorized(address account, bool status) external",
+    "function authorized(address account) view returns (bool)",
+    "function owner() view returns (address)"
+  ]
+  
+  tokenContract = new ethers.Contract(process.env.GTK_TOKEN_ADDRESS, tokenABI, wallet)
+  escrowContract = new ethers.Contract(process.env.ESCROW_CONTRACT_ADDRESS, escrowABI, wallet)
+  
+  console.log('GTK Token contract initialized:', process.env.GTK_TOKEN_ADDRESS)
+  console.log('Escrow contract initialized:', process.env.ESCROW_CONTRACT_ADDRESS)
   
 } catch (error) {
   console.error('Failed to initialize Ethereum components:', error.message)
@@ -107,76 +139,100 @@ const handleClerkAuth = (req, res, next) => {
   })
 }
 
-async function createEscrowForBounty(bountyAmountETH, bountyId) {
+async function createEscrowForBounty(bountyCreatorUserId, bountyAmountGTK, bountyId) {
   try {
-    console.log(`Creating escrow for bounty ${bountyId} with amount ${bountyAmountETH} ETH`)
+    console.log(`Creating GTK escrow for bounty ${bountyId} with amount ${bountyAmountGTK} GTK`)
     
-    const walletBalance = await provider.getBalance(wallet.address)
-    const ethBalance = ethers.formatEther(walletBalance)
-    console.log(`Wallet ETH balance: ${ethBalance} ETH`)
-    
-    const amountWei = ethers.parseEther(bountyAmountETH.toString())
-    
-    if (walletBalance < amountWei) {
-      throw new Error(`Insufficient ETH balance. Current: ${ethBalance} ETH, Required: ${bountyAmountETH} ETH`)
+    const user = await db.collection('users').findOne({ clerk_id: bountyCreatorUserId })
+    if (!user || !user.wallet_id) {
+      throw new Error('User wallet address not found')
     }
     
-    console.log(`Escrow created (no actual transfer needed for bounty ${bountyId})`)
+    const userAddress = user.wallet_id
+    const amountWei = ethers.parseEther(bountyAmountGTK.toString())
+    
+    const userBalance = await tokenContract.balanceOf(userAddress)
+    console.log(`User GTK balance: ${ethers.formatEther(userBalance)} GTK`)
+    
+    if (userBalance < amountWei) {
+      throw new Error(`Insufficient GTK balance. Required: ${bountyAmountGTK} GTK, Available: ${ethers.formatEther(userBalance)} GTK`)
+    }
+    
+    const escrowBalance = await escrowContract.escrowBalance(userAddress)
+    console.log(`User escrow balance: ${ethers.formatEther(escrowBalance)} GTK`)
+    
+    if (escrowBalance >= amountWei) {
+      console.log(`GTK tokens already deposited in escrow for bounty ${bountyId}`)
+      return {
+        escrowAmount: bountyAmountGTK,
+        escrowStatus: 'active',
+        currency: 'GTK',
+        network: 'Sepolia',
+        userAddress: userAddress
+      }
+    }
+    
+    console.log(`GTK escrow validation passed for bounty ${bountyId}`)
     
     return {
-      escrowAmount: bountyAmountETH,
-      escrowStatus: 'active',
-      currency: 'ETH',
-      network: 'Sepolia'
+      escrowAmount: bountyAmountGTK,
+      escrowStatus: 'pending_deposit',
+      currency: 'GTK',
+      network: 'Sepolia',
+      userAddress: userAddress
     }
     
   } catch (error) {
-    console.error('Error creating escrow:', error)
-    throw new Error(`Failed to create escrow: ${error.message}`)
+    console.error('Error creating GTK escrow:', error)
+    throw new Error(`Failed to create GTK escrow: ${error.message}`)
   }
 }
 
-async function releaseEscrowForContribution(contributorWalletAddress, bountyAmountETH) {
+async function releaseEscrowForContribution(contributorWalletAddress, bountyAmountGTK, bountyCreatorUserId) {
   try {
-    console.log(`Releasing ${bountyAmountETH} ETH to ${contributorWalletAddress}`)
+    console.log(`Releasing ${bountyAmountGTK} GTK to ${contributorWalletAddress}`)
     
-    const walletBalance = await provider.getBalance(wallet.address)
-    const ethBalance = ethers.formatEther(walletBalance)
-    const amountWei = ethers.parseEther(bountyAmountETH.toString())
-    
-    console.log(`Wallet ETH balance: ${ethBalance} ETH`)
-    console.log(`Amount to send: ${bountyAmountETH} ETH`)
-    
-    if (walletBalance < amountWei) {
-      throw new Error(`Insufficient ETH balance. Available: ${ethBalance} ETH, Required: ${bountyAmountETH} ETH`)
+    const creator = await db.collection('users').findOne({ clerk_id: bountyCreatorUserId })
+    if (!creator || !creator.wallet_id) {
+      throw new Error('Bounty creator wallet not found')
     }
     
-    console.log('Sending ETH payment...')
-    const tx = await wallet.sendTransaction({
-      to: contributorWalletAddress,
-      value: amountWei,
-      gasLimit: 21000
-    })
+    const creatorAddress = creator.wallet_id
+    const amountWei = ethers.parseEther(bountyAmountGTK.toString())
     
-    console.log(`ETH transaction sent: ${tx.hash}`)
+    const isAuthorized = await escrowContract.authorized(wallet.address)
+    console.log(`Backend wallet authorized: ${isAuthorized}`)
+    
+    if (!isAuthorized) {
+      throw new Error('Backend wallet is not authorized to release funds. Please authorize it first.')
+    }
+    
+    const escrowBalance = await escrowContract.escrowBalance(creatorAddress)
+    console.log(`Creator's escrow balance: ${ethers.formatEther(escrowBalance)} GTK`)
+    
+    if (escrowBalance < amountWei) {
+      throw new Error(`Insufficient escrowed GTK. Available: ${ethers.formatEther(escrowBalance)} GTK, Required: ${bountyAmountGTK} GTK`)
+    }
+    
+    console.log('Releasing GTK tokens from escrow...')
+    const tx = await escrowContract.release(contributorWalletAddress, amountWei)
+    
+    console.log(`GTK release transaction sent: ${tx.hash}`)
     
     const receipt = await tx.wait()
-    console.log(`ETH transaction confirmed in block: ${receipt.blockNumber}`)
-    
-    const balanceAfter = await provider.getBalance(wallet.address)
-    console.log(`Wallet ETH balance after: ${ethers.formatEther(balanceAfter)} ETH`)
+    console.log(`GTK transaction confirmed in block: ${receipt.blockNumber}`)
     
     return {
       releaseTxHash: tx.hash,
-      releaseAmount: bountyAmountETH,
+      releaseAmount: bountyAmountGTK,
       releaseStatus: 'completed',
       blockNumber: receipt.blockNumber,
-      currency: 'ETH'
+      currency: 'GTK'
     }
     
   } catch (error) {
-    console.error('Error releasing escrow:', error)
-    throw new Error(`Failed to release escrow: ${error.message}`)
+    console.error('Error releasing GTK escrow:', error)
+    throw new Error(`Failed to release GTK escrow: ${error.message}`)
   }
 }
 
@@ -229,9 +285,17 @@ async function syncUserToMongoDB(userData) {
 
 async function getUserByGitHubUsername(username) {
   try {
-    const user = await db.collection('users').findOne({ 
+    let user = await db.collection('users').findOne({ 
       github_username: username 
     })
+    
+    if (!user) {
+      user = await db.collection('users').findOne({ 
+        github_username: { $regex: new RegExp(`^${username}$`, 'i') }
+      })
+    }
+    
+    console.log(`Found user for GitHub username ${username}:`, user ? 'Yes' : 'No')
     return user
   } catch (error) {
     console.error('Error fetching user by GitHub username:', error)
@@ -257,7 +321,7 @@ async function handleMergedPR(payload) {
       return
     }
     
-    console.log(`Found bounty: ${bounty.title} (${bounty.amount} ETH)`)
+    console.log(`Found bounty: ${bounty.title} (${bounty.amount} GTK)`)
     
     const contributorUsername = pr.user.login
     const contributorUser = await getUserByGitHubUsername(contributorUsername)
@@ -267,7 +331,7 @@ async function handleMergedPR(payload) {
     }
     
     const paymentAddress = contributorUser?.wallet_id || process.env.FALLBACK_WALLET_ADDRESS
-    console.log(`Payment will be sent to: ${paymentAddress}`)
+    console.log(`GTK payment will be sent to: ${paymentAddress}`)
     
     const contributionData = {
       bountyId: bounty._id,
@@ -295,8 +359,8 @@ async function handleMergedPR(payload) {
     console.log(`Contribution recorded with ID: ${contributionResult.insertedId}`)
     
     try {
-      console.log(`Initiating ETH payment for ${bounty.amount} ETH...`)
-      const escrowReleaseInfo = await releaseEscrowForContribution(paymentAddress, bounty.amount)
+      console.log(`Initiating GTK payment for ${bounty.amount} GTK...`)
+      const escrowReleaseInfo = await releaseEscrowForContribution(paymentAddress, bounty.amount, bounty.createdBy)
       
       await db.collection('contributions').updateOne(
         { _id: contributionResult.insertedId },
@@ -305,7 +369,7 @@ async function handleMergedPR(payload) {
             payment_status: 'completed',
             payment_tx_hash: escrowReleaseInfo.releaseTxHash,
             payment_amount: escrowReleaseInfo.releaseAmount,
-            payment_currency: 'ETH',
+            payment_currency: 'GTK',
             payment_block_number: escrowReleaseInfo.blockNumber,
             payment_completed_at: new Date()
           }
@@ -327,11 +391,11 @@ async function handleMergedPR(payload) {
         }
       )
       
-      console.log(`SUCCESS: Bounty ${bounty._id} completed and ${bounty.amount} ETH sent to ${paymentAddress}`)
+      console.log(`SUCCESS: Bounty ${bounty._id} completed and ${bounty.amount} GTK sent to ${paymentAddress}`)
       console.log(`Transaction hash: ${escrowReleaseInfo.releaseTxHash}`)
       
     } catch (paymentError) {
-      console.error('Payment release failed:', paymentError)
+      console.error('GTK Payment release failed:', paymentError)
       
       await db.collection('contributions').updateOne(
         { _id: contributionResult.insertedId },
@@ -371,28 +435,122 @@ app.get('/health', (req, res) => {
     ethereumConfigured: !!process.env.ETHEREUM_RPC_URL,
     webhookSecretConfigured: !!process.env.CLERK_WEBHOOK_SECRET,
     walletAddress: wallet?.address || 'Not initialized',
-    paymentCurrency: 'ETH',
-    network: 'Sepolia'
+    paymentCurrency: 'GTK',
+    network: 'Sepolia',
+    gtkTokenAddress: process.env.GTK_TOKEN_ADDRESS,
+    escrowContractAddress: process.env.ESCROW_CONTRACT_ADDRESS
   })
 })
 
 app.get('/api/wallet/balance', async (req, res) => {
   try {
-    const balance = await provider.getBalance(wallet.address)
+    const ethBalance = await provider.getBalance(wallet.address)
+    const gtkBalance = await tokenContract.balanceOf(wallet.address)
     const blockNumber = await provider.getBlockNumber()
     
     res.json({
       walletAddress: wallet.address,
-      balance: ethers.formatEther(balance),
-      currency: 'ETH',
+      ethBalance: ethers.formatEther(ethBalance),
+      gtkBalance: ethers.formatEther(gtkBalance),
+      currency: 'GTK',
       network: 'Sepolia',
-      blockNumber: blockNumber
+      blockNumber: blockNumber,
+      tokenAddress: process.env.GTK_TOKEN_ADDRESS
     })
   } catch (error) {
     res.status(500).json({
       error: 'Failed to get wallet balance',
       details: error.message
     })
+  }
+})
+
+app.get('/api/users/gtk-balance', handleClerkAuth, async (req, res) => {
+  try {
+    const userId = req.auth.userId
+    const user = await db.collection('users').findOne({ clerk_id: userId })
+    
+    if (!user || !user.wallet_id) {
+      return res.status(404).json({ error: 'User wallet not found' })
+    }
+    
+    const gtkBalance = await tokenContract.balanceOf(user.wallet_id)
+    const escrowBalance = await escrowContract.escrowBalance(user.wallet_id)
+    
+    res.json({
+      walletAddress: user.wallet_id,
+      gtkBalance: ethers.formatEther(gtkBalance),
+      escrowBalance: ethers.formatEther(escrowBalance),
+      currency: 'GTK'
+    })
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to get GTK balance',
+      details: error.message
+    })
+  }
+})
+
+app.post('/api/bounties/:id/sync-escrow', handleClerkAuth, async (req, res) => {
+  try {
+    const bountyId = req.params.id
+    const bounty = await db.collection('bounties').findOne({ 
+      _id: new ObjectId(bountyId) 
+    })
+
+    if (!bounty) {
+      return res.status(404).json({ error: 'Bounty not found' })
+    }
+
+    const escrowBalance = await escrowContract.escrowBalance(bounty.userAddress)
+    const amountWei = ethers.parseEther(bounty.amount.toString())
+    
+    console.log(`Escrow balance: ${ethers.formatEther(escrowBalance)} GTK`)
+    console.log(`Required amount: ${bounty.amount} GTK`)
+    
+    if (escrowBalance >= amountWei) {
+      await db.collection('bounties').updateOne(
+        { _id: new ObjectId(bountyId) },
+        {
+          $set: {
+            escrowStatus: 'active',
+            updatedAt: new Date()
+          }
+        }
+      )
+      
+      res.json({ 
+        success: true, 
+        message: 'Bounty status updated to active',
+        escrowBalance: ethers.formatEther(escrowBalance)
+      })
+    } else {
+      res.json({ 
+        success: false, 
+        message: 'Insufficient escrow balance',
+        escrowBalance: ethers.formatEther(escrowBalance),
+        required: bounty.amount
+      })
+    }
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+app.get('/api/debug/escrow-auth', async (req, res) => {
+  try {
+    const backendWalletAuth = await escrowContract.authorized(wallet.address)
+    const escrowOwner = await escrowContract.owner()
+    
+    res.json({
+      backendWallet: wallet.address,
+      isAuthorized: backendWalletAuth,
+      escrowOwner: escrowOwner,
+      canRelease: backendWalletAuth || wallet.address === escrowOwner
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
   }
 })
 
@@ -947,7 +1105,7 @@ app.get('/api/webhooks', handleClerkAuth, async (req, res) => {
 
 app.post('/api/bounties', handleClerkAuth, async (req, res) => {
   try {
-    console.log('=== BOUNTY CREATION REQUEST ===')
+    console.log('GTK BOUNTY CREATION REQUEST')
     console.log('Request body:', JSON.stringify(req.body, null, 2))
     
     const userId = req.auth.userId
@@ -971,7 +1129,7 @@ app.post('/api/bounties', handleClerkAuth, async (req, res) => {
       title,
       description,
       amount: parseFloat(amount),
-      currency: 'ETH',
+      currency: 'GTK',
       repositoryFullName,
       requirements: requirements || [],
       createdBy: userId,
@@ -988,38 +1146,44 @@ app.post('/api/bounties', handleClerkAuth, async (req, res) => {
     const result = await db.collection('bounties').insertOne(bountyData)
     const bountyId = result.insertedId
     
-    console.log(`Created bounty ${bountyId}, now creating escrow...`)
+    console.log(`Created bounty ${bountyId}, now creating GTK escrow...`)
     
     try {
-      console.log(`Attempting to create escrow for ${amount} ETH...`)
-      const escrowInfo = await createEscrowForBounty(amount, bountyId)
+      console.log(`Attempting to create GTK escrow for ${amount} GTK...`)
+      const escrowInfo = await createEscrowForBounty(userId, amount, bountyId)
       
-      console.log('Escrow created successfully, updating bounty record...')
+      console.log('GTK Escrow validation successful, updating bounty record...')
       await db.collection('bounties').updateOne(
         { _id: bountyId },
         {
           $set: {
-            escrowStatus: 'active',
+            escrowStatus: escrowInfo.escrowStatus,
             escrowAmount: escrowInfo.escrowAmount,
-            escrowCurrency: 'ETH',
+            escrowCurrency: 'GTK',
             escrowCreatedAt: new Date(),
+            userAddress: escrowInfo.userAddress,
             updatedAt: new Date()
           }
         }
       )
       
-      console.log(`SUCCESS: Escrow created successfully for bounty ${bountyId}`)
+      console.log(`SUCCESS: GTK Escrow ready for bounty ${bountyId}`)
       console.log('Escrow info:', escrowInfo)
       
       res.json({
         success: true,
         bountyId: bountyId,
         escrowInfo: escrowInfo,
-        message: 'Bounty and escrow created successfully'
+        message: escrowInfo.escrowStatus === 'active' ? 
+          'Bounty created and tokens are already escrowed!' : 
+          'Bounty created. User needs to approve and deposit GTK tokens.',
+        nextSteps: escrowInfo.escrowStatus === 'active' ? 
+          ['Bounty is ready for contributors!'] :
+          ['User must approve escrow contract to spend GTK tokens', 'User must call deposit function to escrow tokens']
       })
       
     } catch (escrowError) {
-      console.error('ESCROW ERROR:', escrowError)
+      console.error('GTK ESCROW ERROR:', escrowError)
       
       await db.collection('bounties').updateOne(
         { _id: bountyId },
@@ -1034,7 +1198,7 @@ app.post('/api/bounties', handleClerkAuth, async (req, res) => {
       )
       
       return res.status(500).json({
-        error: 'Bounty created but escrow setup failed',
+        error: 'Bounty created but GTK escrow setup failed',
         details: escrowError.message,
         bountyId: bountyId
       })
@@ -1054,7 +1218,7 @@ app.get('/api/bounties', handleClerkAuth, async (req, res) => {
     const bounties = await db.collection('bounties')
       .find({ 
         status: { $nin: ['completed', 'escrow_failed'] },
-        escrowStatus: 'active'
+        escrowStatus: { $in: ['active', 'ready_for_deposit'] }
       })
       .sort({ createdAt: -1 })
       .toArray()
@@ -1267,7 +1431,7 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`)
   console.log(`Health check: http://localhost:${PORT}/health`)
-  console.log(`Wallet balance: http://localhost:${PORT}/api/wallet/balance`)
+  console.log(`GTK balance: http://localhost:${PORT}/api/wallet/balance`)
   console.log(`Wallet address: ${wallet.address}`)
-  console.log('Payment currency: ETH (Sepolia)')
+  console.log('Payment currency: GTK (Sepolia)')
 })
