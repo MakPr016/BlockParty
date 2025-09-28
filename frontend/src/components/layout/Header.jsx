@@ -26,7 +26,7 @@ const Header = () => {
               className="h-8 w-8 object-contain"
             />
             <span className="font-bold text-xl text-primary">
-              Block Party
+              Git Token
             </span>
           </div>
 
