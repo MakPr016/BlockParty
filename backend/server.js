@@ -16,7 +16,8 @@ const FRONTEND_URL = process.env.FRONTEND_URL;
 
 const allowedOrigins = [
   'http://localhost:5173', 
-  'http://localhost:3000', 
+  'http://localhost:3000',
+  'https://git-bounty-nine.vercel.app' ,
   FRONTEND_URL
 ].filter(Boolean)
 
