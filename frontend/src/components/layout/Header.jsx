@@ -12,7 +12,7 @@ const Header = () => {
   const isActive = (path) => location.pathname === path
 
   return (
-    <header className='header sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60'>
+    <header className='header sticky font-sans right-0 left-0 top-0 px-4 bg-white  dark:bg-black/40 backdrop-blur-lg z-[100] flex items-center border-b-[1px] border-neutral-200 dark:border-neutral-800 justify-between'>
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           {/* Logo and Brand */}
