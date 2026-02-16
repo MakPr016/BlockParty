@@ -14,7 +14,7 @@
   "type": "module",
   "dependencies": {
     "@clerk/backend": "^2.12.1",
-    "@clerk/clerk-sdk-node": "^4.13.23",
+    "@clerk/clerk-sdk-node": "^5.1.6",
     "@octokit/core": "^7.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",

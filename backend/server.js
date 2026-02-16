@@ -10,7 +10,7 @@ import dotenv from 'dotenv'
 dotenv.config()
 
 const app = express()
-const PORT = process.env.PORT || 3000
+const PORT = process.env.PORT || 4000
 const FRONTEND_URL = process.env.FRONTEND_URL;
 
 
@@ -717,7 +717,8 @@ app.get('/api/admin/payment-logs', handleClerkAuth, async (req, res) => {
 app.get('/api/repositories', handleClerkAuth, async (req, res) => {
   try {
     const userId = req.auth.userId
-    const oauthTokens = await clerkClient.users.getUserOauthAccessToken(userId, 'oauth_github')
+    const oauthResponse = await clerkClient.users.getUserOauthAccessToken(userId, 'oauth_github')
+    const oauthTokens = oauthResponse.data
     
     if (!oauthTokens || oauthTokens.length === 0) {
       return res.status(400).json({ 
@@ -765,7 +766,8 @@ app.get('/api/repositories/:owner/:repo/pulls', handleClerkAuth, async (req, res
     const userId = req.auth.userId
     const { state = 'all', per_page = 30, page = 1 } = req.query
     
-    const oauthTokens = await clerkClient.users.getUserOauthAccessToken(userId, 'oauth_github')
+    const oauthResponse = await clerkClient.users.getUserOauthAccessToken(userId, 'oauth_github')
+    const oauthTokens = oauthResponse.data
     
     if (!oauthTokens || oauthTokens.length === 0) {
       return res.status(400).json({ 
@@ -818,7 +820,8 @@ app.get('/api/repositories/:owner/:repo/pulls/:number/diff', handleClerkAuth, as
     const { owner, repo, number } = req.params
     const userId = req.auth.userId
     
-    const oauthTokens = await clerkClient.users.getUserOauthAccessToken(userId, 'oauth_github')
+    const oauthResponse = await clerkClient.users.getUserOauthAccessToken(userId, 'oauth_github')
+    const oauthTokens = oauthResponse.data
     
     if (!oauthTokens || oauthTokens.length === 0) {
       return res.status(400).json({ 
@@ -881,7 +884,8 @@ app.post('/api/repositories/:owner/:repo/webhook', handleClerkAuth, async (req, 
     const { owner, repo } = req.params
     const userId = req.auth.userId
     
-    const oauthTokens = await clerkClient.users.getUserOauthAccessToken(userId, 'oauth_github')
+    const oauthResponse = await clerkClient.users.getUserOauthAccessToken(userId, 'oauth_github')
+    const oauthTokens = oauthResponse.data
     
     if (!oauthTokens || oauthTokens.length === 0) {
       return res.status(400).json({ 
