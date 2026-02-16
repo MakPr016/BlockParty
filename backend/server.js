@@ -18,6 +18,7 @@ const allowedOrigins = [
   'http://localhost:5173', 
   'http://localhost:3000',
   'https://git-bounty-nine.vercel.app' ,
+  'https://gitbounty.tripodhub.in',
   FRONTEND_URL
 ].filter(Boolean)
 
